@@ -1,0 +1,53 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "reviews": {
+      "$review": {
+        ".read": true,
+        "meta": {
+          ".write": true,
+          ".validate": "newData.hasChildren(['app'])"
+        },
+        "notes": {
+          "$note": {
+            ".write": true,
+            ".validate": "newData.hasChildren(['createdAt', 'status', 'anchor', 'messages'])",
+            "status": {
+              ".validate": "newData.isString() && newData.val().matches(/^(open|fix|resolved)$/)"
+            },
+            "resolution": {
+              ".validate": "newData.isString() && newData.val().length <= 300"
+            },
+            "messages": {
+              "$message": {
+                ".validate": "newData.hasChildren(['author', 'text', 'at'])",
+                "author": {
+                  ".validate": "newData.isString() && newData.val().length <= 60"
+                },
+                "text": {
+                  ".validate": "newData.isString() && newData.val().length <= 8000"
+                },
+                "at": {
+                  ".validate": "newData.isString() && newData.val().length <= 40"
+                },
+                "agent": {
+                  ".validate": "newData.isBoolean()"
+                },
+                "$other": {
+                  ".validate": false
+                }
+              }
+            }
+          }
+        },
+        "shots": {
+          "$note": {
+            ".write": true,
+            ".validate": "newData.isString() && newData.val().length <= 600000 && newData.val().beginsWith('data:image/')"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+name: Review layer
+description: >
+  Adds an in-app notes layer to a built web app before it is deployed as a
+  preview. Reviewers right-click the running preview to pin notes to the UI;
+  notes and replies live in a Firebase Realtime Database that people and agents
+  read and write over plain HTTP.
+
+inputs:
+  dir:
+    description: Build output directory to add the layer to (run this after the build, before the deploy)
+    required: true
+  database-url:
+    description: Firebase Realtime Database URL, for example https://<project>-default-rtdb.firebaseio.com
+    required: true
+  app:
+    description: App name shown with the notes
+    default: ${{ github.event.repository.name }}
+  key:
+    description: What the notes belong to. Builds with the same key share their notes, so a PR keeps its notes across pushes.
+    default: pr-${{ github.event.pull_request.number || github.ref_name }}
+  salt:
+    description: A secret that makes the review id unguessable. Anyone with the id can read and write the notes.
+    default: ''
+  base:
+    description: URL path the app is served under
+    default: /
+
+outputs:
+  review-id:
+    description: The id the notes are stored under
+    value: ${{ steps.inject.outputs.review-id }}
+  notes-url:
+    description: Public URL of all notes as JSON
+    value: ${{ steps.inject.outputs.notes-url }}
+  agent-path:
+    description: Path on the deployed preview of the page to hand to an agent
+    value: ${{ steps.inject.outputs.agent-path }}
+
+runs:
+  using: composite
+  steps:
+    - id: inject
+      shell: bash
+      env:
+        REVIEW_DIR: ${{ inputs.dir }}
+        REVIEW_DB: ${{ inputs.database-url }}
+        REVIEW_APP: ${{ inputs.app }}
+        REVIEW_KEY: ${{ inputs.key }}
+        REVIEW_SALT: ${{ inputs.salt }}
+        REVIEW_BASE: ${{ inputs.base }}
+        REVIEW_BRANCH: ${{ github.head_ref || github.ref_name }}
+        REVIEW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        node "$GITHUB_ACTION_PATH/inject.mjs" \
+          --dir "$REVIEW_DIR" \
+          --db "$REVIEW_DB" \
+          --app "$REVIEW_APP" \
+          --key "$REVIEW_KEY" \
+          --salt "$REVIEW_SALT" \
+          --base "$REVIEW_BASE" \
+          --branch "$REVIEW_BRANCH" \
+          --sha "$REVIEW_SHA"

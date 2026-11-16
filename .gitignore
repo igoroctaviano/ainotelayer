@@ -1,0 +1,8 @@
+# Local note stores written by server.mjs
+notes/
+
+# Firebase emulator logs
+*-debug.log
+
+node_modules/
+.DS_Store

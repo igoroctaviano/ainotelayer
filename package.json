@@ -6,6 +6,7 @@
     "type": "git",
     "url": "git+https://github.com/igoroctaviano/ainotelayer.git"
   },
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./vite.mjs",

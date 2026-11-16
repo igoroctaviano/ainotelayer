@@ -1,5 +1,5 @@
 """
-Runs the review-layer database rules in the Firebase emulator against the
+Runs the ainotelayer database rules in the Firebase emulator against the
 payloads the overlay really writes (taken from the local store).
 """
 import json, sys, urllib.request, urllib.error

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Review layer, local mode.
+ * ainotelayer, local mode.
  *
  * A reverse proxy that puts the notes overlay on top of any running web app (a
  * dev server or a built preview) without touching its source. Notes are kept in
@@ -30,7 +30,7 @@ const target = new URL(arg('target', 'http://localhost:3100'))
 const port = Number(arg('port', 3200))
 const repo = path.resolve(arg('repo', process.cwd()))
 const storeDir = path.resolve(arg('store', path.join(here, 'notes')))
-const PREFIX = '/__review'
+const PREFIX = '/__ainotelayer'
 const DB = `${PREFIX}/db`
 const CORS = {
   'access-control-allow-origin': '*',
@@ -57,10 +57,13 @@ function meta() {
   if (Date.now() - metaCache.at > 10_000) {
     const app = path.basename(repo)
     const branch = arg('branch', '') || git('rev-parse', '--abbrev-ref', 'HEAD') || 'unknown'
+    /** owner/name on GitHub, so notes can link to the source file and line */
+    const remote = /github\.com[:/](.+?)(?:\.git)?$/.exec(git('remote', 'get-url', 'origin'))
     metaCache = {
       at: Date.now(),
       value: {
         app,
+        ...(remote === null ? {} : { repo: remote[1] }),
         branch,
         sha: git('rev-parse', '--short', 'HEAD'),
         review: `${slug(app)}__${slug(branch)}`,
@@ -289,7 +292,12 @@ function overlayTag(info) {
 function recordMeta(info) {
   const tree = loadTree(info.review)
   const stored = getAt(tree, ['meta'])
-  if (stored === null || stored.sha !== info.sha || stored.branch !== info.branch) {
+  if (
+    stored === null ||
+    stored.sha !== info.sha ||
+    stored.branch !== info.branch ||
+    stored.repo !== info.repo
+  ) {
     saveTree(info.review, setAt(tree, ['meta'], { ...info, target: target.origin }))
   }
 }
@@ -309,7 +317,7 @@ function serveOwn(request, response, url) {
   json(response, 404, { error: 'Not found' })
 }
 
-/** Everything that is not the review layer goes to the app; HTML gets the overlay tag */
+/** Everything that is not ainotelayer's own goes to the app; HTML gets the overlay tag */
 function proxy(request, response) {
   const headers = { ...request.headers, host: target.host }
   delete headers['accept-encoding']
@@ -351,7 +359,7 @@ function proxy(request, response) {
     if (!response.headersSent) {
       response.writeHead(502, { 'content-type': 'text/plain' })
     }
-    response.end(`Review layer: cannot reach ${target.origin} (${error.message})`)
+    response.end(`ainotelayer: cannot reach ${target.origin} (${error.message})`)
   })
   request.pipe(upstream)
 }
@@ -397,7 +405,7 @@ server.on('upgrade', (request, socket, head) => {
 
 server.listen(port, 'localhost', () => {
   const info = meta()
-  console.log(`Review layer: http://localhost:${port} -> ${target.origin}`)
+  console.log(`ainotelayer: http://localhost:${port} -> ${target.origin}`)
   console.log(`Notes for ${info.app} @ ${info.branch} (${info.sha}): ${treeFile(info.review)}`)
   console.log(`Agent handoff: http://localhost:${port}${PREFIX}/agent.md`)
 })

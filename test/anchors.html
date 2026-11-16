@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ainotelayer anchor tests</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; }
+      pre { background: #f4f4f5; padding: 12px; border-radius: 6px; white-space: pre-wrap; }
+      #fixture { border: 1px dashed #bbb; padding: 12px; margin-bottom: 16px; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Does a note still find its element after the UI changes?
+
+      Each scenario renders a "before" UI, records an anchor for every element
+      marked data-t (the mark itself is never used for matching), swaps in the
+      "after" UI, and checks where each anchor lands. Serve the repository
+      folder with any static server and open this page; the result is in the
+      title and below.
+    -->
+    <h1>ainotelayer anchor tests</h1>
+    <div id="fixture"></div>
+    <pre id="out">running…</pre>
+    <script src="../overlay.js"></script>
+    <script>
+      const SCENARIOS = [
+        {
+          name: 'nothing changed',
+          before: `<nav aria-label="Toolbar"><button data-t="save">Save</button><button data-t="open" aria-label="Open file">O</button></nav>`,
+          expect: { save: 'found', open: 'found' },
+        },
+        {
+          name: 'buttons reordered and a new one added in front',
+          before: `<nav aria-label="Toolbar"><button data-t="save">Save</button><button data-t="open" aria-label="Open file">O</button></nav>`,
+          after: `<nav aria-label="Toolbar"><button data-t="new">New</button><button data-t="open" aria-label="Open file">O</button><button data-t="save">Save</button></nav>`,
+          expect: { save: 'moved', open: 'found' },
+        },
+        {
+          name: 'fields wrapped in extra layout elements',
+          before: `<section><h2>Display</h2><label>Gamma <input data-t="gamma" type="checkbox" name="gamma"></label><label>ICC <input data-t="icc" type="checkbox" name="icc"></label></section>`,
+          after: `<section><h2>Display</h2><div class="grid"><div><label>ICC <input data-t="icc" type="checkbox" name="icc"></label></div><div><label>Gamma <input data-t="gamma" type="checkbox" name="gamma"></label></div></div></section>`,
+          expect: { gamma: 'moved', icc: 'moved' },
+        },
+        {
+          name: 'a row inserted above rows with identical buttons',
+          before: `<ul><li><button data-t="del-a">Delete</button> Alpha</li><li><button data-t="del-b">Delete</button> Beta</li></ul>`,
+          after: `<ul><li><button data-t="del-new">Delete</button> Zero</li><li><button data-t="del-a">Delete</button> Alpha</li><li><button data-t="del-b">Delete</button> Beta</li></ul>`,
+          expect: { 'del-a': 'moved', 'del-b': 'moved' },
+        },
+        {
+          name: 'a button without source stamps fully renamed where it stands (cannot be told from a replacement)',
+          before: `<div role="toolbar" aria-label="Viewer"><button data-t="opacity">Opacity</button><button data-t="fit">Fit</button></div>`,
+          after: `<div role="toolbar" aria-label="Viewer"><button data-t="opacity">Transparency</button><button data-t="fit">Fit</button></div>`,
+          expect: { opacity: 'missing', fit: 'found' },
+        },
+        {
+          name: 'a button renamed a little where it stands',
+          before: `<div role="toolbar" aria-label="Viewer"><button data-t="go">Go to</button><button data-t="fit">Fit</button></div>`,
+          after: `<div role="toolbar" aria-label="Viewer"><button data-t="go">Go to position</button><button data-t="fit">Fit</button></div>`,
+          expect: { go: 'found', fit: 'found' },
+        },
+        {
+          name: 'an element removed',
+          before: `<p><a data-t="docs" href="/docs/start">Docs</a> <a data-t="help" href="/help">Help</a></p>`,
+          after: `<p><a data-t="help" href="/help">Help</a></p>`,
+          expect: { docs: 'missing', help: 'any' },
+        },
+        {
+          name: 'sections with the same button swap places',
+          before: `<section><h2>Segments</h2><button data-t="seg-hide">Hide all</button></section><section><h2>Annotations</h2><button data-t="ann-hide">Hide all</button></section>`,
+          after: `<section><h2>Annotations</h2><button data-t="ann-hide">Hide all</button></section><section><h2>Segments</h2><button data-t="seg-hide">Hide all</button></section>`,
+          expect: { 'seg-hide': 'moved', 'ann-hide': 'moved' },
+        },
+        {
+          name: 'source-stamped controls moved to another panel, lines shifted',
+          before: `<section><h2>Layers</h2><button data-t="opacity" data-anl-src="LayerRow@src/LayerRow.tsx:40:7">Opacity</button><button data-t="hide" data-anl-src="LayerRow@src/LayerRow.tsx:44:7">Hide</button></section>`,
+          after: `<aside><h3>Overlays</h3><div><button data-t="hide" data-anl-src="LayerRow@src/LayerRow.tsx:47:7">Hide</button><button data-t="opacity" data-anl-src="LayerRow@src/LayerRow.tsx:43:7">Opacity</button></div></aside>`,
+          expect: { opacity: 'moved', hide: 'moved' },
+        },
+        {
+          name: 'a source-stamped control fully renamed where it stands',
+          before: `<section><h2>Layers</h2><button data-t="opacity" data-anl-src="LayerRow@src/LayerRow.tsx:40:7">Opacity</button><button data-t="hide" data-anl-src="LayerRow@src/LayerRow.tsx:44:7">Hide</button></section>`,
+          after: `<section><h2>Layers</h2><button data-t="opacity" data-anl-src="LayerRow@src/LayerRow.tsx:40:7">Transparency</button><button data-t="hide" data-anl-src="LayerRow@src/LayerRow.tsx:44:7">Hide</button></section>`,
+          expect: { opacity: 'changed', hide: 'found' },
+        },
+        {
+          name: 'a source-stamped control removed while its sibling stays',
+          before: `<section><h2>Layers</h2><button data-t="opacity" data-anl-src="LayerRow@src/LayerRow.tsx:40:7">Opacity</button><button data-t="hide" data-anl-src="LayerRow@src/LayerRow.tsx:44:7">Hide</button></section>`,
+          after: `<section><h2>Layers</h2><button data-t="hide" data-anl-src="LayerRow@src/LayerRow.tsx:43:7">Hide</button></section>`,
+          expect: { opacity: 'missing', hide: 'any' },
+        },
+      ]
+
+      const fixture = document.getElementById('fixture')
+      const lines = []
+      let passed = 0
+      let total = 0
+      for (const scenario of SCENARIOS) {
+        fixture.innerHTML = scenario.before
+        const anchors = {}
+        for (const element of fixture.querySelectorAll('[data-t]')) {
+          if (element.dataset.t in scenario.expect) {
+            anchors[element.dataset.t] = window.ainotelayer.describe(element)
+          }
+        }
+        fixture.innerHTML = scenario.after ?? scenario.before
+        lines.push(scenario.name)
+        for (const [name, expected] of Object.entries(scenario.expect)) {
+          const hit = window.ainotelayer.locate(anchors[name])
+          const landed = hit === null ? null : (hit.element.dataset.t ?? '(unmarked element)')
+          const how = hit === null ? 'missing' : hit.how
+          let ok
+          if (expected === 'missing') {
+            ok = hit === null
+          } else if (expected === 'any') {
+            ok = landed === name
+          } else {
+            ok = landed === name && how === expected
+          }
+          total += 1
+          passed += ok ? 1 : 0
+          const where = landed === null ? 'nothing' : landed === name ? 'itself' : `WRONG element "${landed}"`
+          lines.push(`  ${ok ? 'PASS' : 'FAIL'}  ${name}: expected ${expected}, got ${how} (${where})`)
+        }
+      }
+      fixture.innerHTML = ''
+      const summary = `${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`
+      document.title = summary
+      document.getElementById('out').textContent = `${summary}\n\n${lines.join('\n')}`
+    </script>
+  </body>
+</html>

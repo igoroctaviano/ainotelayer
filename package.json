@@ -1,0 +1,31 @@
+{
+  "name": "ainotelayer",
+  "version": "0.1.0",
+  "description": "Pin notes to any element of a running web app preview, for people and AI agents to discuss and resolve.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/igoroctaviano/ainotelayer.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./vite.mjs",
+    "./vite": "./vite.mjs",
+    "./webpack": "./webpack.cjs",
+    "./loader": "./loader.cjs",
+    "./stamp": "./stamp.mjs"
+  },
+  "bin": {
+    "ainotelayer": "./inject.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "serve": "node server.mjs"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.26.0",
+    "magic-string": "^0.30.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

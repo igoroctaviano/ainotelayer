@@ -1,17 +1,20 @@
-name: Review layer
+name: ainotelayer
 description: >
   Adds an in-app notes layer to a built web app before it is deployed as a
-  preview. Reviewers right-click the running preview to pin notes to the UI;
-  notes and replies live in a Firebase Realtime Database that people and agents
-  read and write over plain HTTP.
+  preview. Reviewers right-click the running preview to pin notes to the UI.
+  With a database-url, notes and replies are shared through a Firebase Realtime
+  Database that people and agents read and write over plain HTTP. Without one,
+  notes stay in each reviewer's browser and travel as a downloaded file.
 
 inputs:
   dir:
     description: Build output directory to add the layer to (run this after the build, before the deploy)
     required: true
   database-url:
-    description: Firebase Realtime Database URL, for example https://<project>-default-rtdb.firebaseio.com
-    required: true
+    description: >
+      Firebase Realtime Database URL, for example https://<project>-default-rtdb.firebaseio.com.
+      Leave empty to keep notes in each reviewer's browser.
+    default: ''
   app:
     description: App name shown with the notes
     default: ${{ github.event.repository.name }}
@@ -30,7 +33,7 @@ outputs:
     description: The id the notes are stored under
     value: ${{ steps.inject.outputs.review-id }}
   notes-url:
-    description: Public URL of all notes as JSON
+    description: Public URL of all notes as JSON (empty without a database)
     value: ${{ steps.inject.outputs.notes-url }}
   agent-path:
     description: Path on the deployed preview of the page to hand to an agent
@@ -48,6 +51,7 @@ runs:
         REVIEW_KEY: ${{ inputs.key }}
         REVIEW_SALT: ${{ inputs.salt }}
         REVIEW_BASE: ${{ inputs.base }}
+        REVIEW_REPO: ${{ github.repository }}
         REVIEW_BRANCH: ${{ github.head_ref || github.ref_name }}
         REVIEW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
@@ -58,5 +62,6 @@ runs:
           --key "$REVIEW_KEY" \
           --salt "$REVIEW_SALT" \
           --base "$REVIEW_BASE" \
+          --repo "$REVIEW_REPO" \
           --branch "$REVIEW_BRANCH" \
           --sha "$REVIEW_SHA"

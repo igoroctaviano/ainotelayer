@@ -1,11 +1,16 @@
-# Example: a PR preview on Firebase Hosting with the review layer on top.
+# Example: a PR preview on Firebase Hosting with ainotelayer on top.
 # Copy into .github/workflows/ of the app's repo and adjust the build step.
 #
 # Needs, once per Firebase project:
-#   - a Realtime Database with database.rules.json deployed
-#   - repo variable REVIEW_DATABASE_URL, repo secrets REVIEW_SALT and
-#     FIREBASE_SERVICE_ACCOUNT
-name: preview-with-review-layer
+#   - repo secret FIREBASE_SERVICE_ACCOUNT, for the hosting deploy
+#   - to share notes between reviewers: a Realtime Database with
+#     database.rules.json deployed, repo variable REVIEW_DATABASE_URL and repo
+#     secret REVIEW_SALT. Without them notes stay in each reviewer's browser.
+#
+# For notes that name the source file and line, add the build plugin to the
+# app's bundler config once (see vite.mjs or webpack.cjs); AINOTELAYER=1 below
+# switches it on for this build only.
+name: preview-with-ainotelayer
 
 on:
   pull_request:
@@ -29,10 +34,12 @@ jobs:
 
       # The app's own build; anything that ends in a static output directory.
       - run: npm ci && npm run build
+        env:
+          AINOTELAYER: 1
 
       # After the build, before the deploy.
       - id: review
-        uses: OWNER/review-layer@v1
+        uses: igoroctaviano/ainotelayer@main
         with:
           dir: build
           database-url: ${{ vars.REVIEW_DATABASE_URL }}
@@ -53,7 +60,7 @@ jobs:
           AGENT_PATH: ${{ steps.review.outputs.agent-path }}
         with:
           script: |
-            const marker = '<!-- review-layer -->'
+            const marker = '<!-- ainotelayer -->'
             const preview = process.env.PREVIEW_URL.replace(/\/$/, '')
             const body = [
               marker,

@@ -1,5 +1,5 @@
 /**
- * Review layer overlay.
+ * ainotelayer overlay.
  *
  * Injected by server.mjs into the app under review. Right-click anything to pin
  * a note to it. Each note stores where the element lives (XPath, selector, React
@@ -10,33 +10,46 @@
  * Shift+right-click keeps the browser's own context menu.
  */
 ;(() => {
-  if (window.__reviewLayer !== undefined) {
+  if (window.ainotelayer !== undefined) {
     return
   }
 
   /**
-   * Notes live in a Firebase Realtime Database (or the local server, which
-   * speaks the same REST dialect). The script tag says which one and which
-   * review: data-db and data-review.
+   * Where notes live is set on the script tag. With data-db they are shared:
+   * a Firebase Realtime Database, or the local server, which speaks the same
+   * REST dialect. Without it they stay in this browser's localStorage, so the
+   * layer works with nothing set up; download and import move them around.
+   * data-review names the review; data-meta carries the build info.
    */
   const tag = document.currentScript
-  const [DB, DB_QUERY] = (tag?.dataset.db ?? '/__review/db').split('?')
+  const SHARED = Boolean(tag?.dataset.db)
+  const [DB, DB_QUERY] = (tag?.dataset.db ?? '').split('?')
   const REVIEW = tag?.dataset.review ?? 'default'
+  const LOCAL_KEY = `ainotelayer:${REVIEW}`
+  let tagMeta = {}
+  try {
+    tagMeta = JSON.parse(tag?.dataset.meta ?? '{}') ?? {}
+  } catch {
+    tagMeta = {}
+  }
 
   /** The database URL may carry a query; the Firebase emulator needs `?ns=<name>` */
   function urlOf(pathname) {
     const suffix = DB_QUERY ? `?${DB_QUERY}` : ''
     return `${DB.replace(/\/$/, '')}/reviews/${encodeURIComponent(REVIEW)}/${pathname}.json${suffix}`
   }
-  const WHO = 'review-layer-author'
-  const OPEN = 'review-layer-open'
-  const FLOAT = 'review-layer-float'
+  const WHO = 'ainotelayer-author'
+  const OPEN = 'ainotelayer-open'
+  const FLOAT = 'ainotelayer-float'
   const STATUS = {
     open: ['Open', '#6ea8fe'],
     fix: ['Fix in place', '#f2c94c'],
     resolved: ['Resolved', '#4cc38a'],
   }
   const KINDS = ['Change', 'Bug', 'Question', 'Research']
+  /** Attributes written by the build plugin (stamp.mjs) */
+  const SRC = 'data-anl-src'
+  const USE = 'data-anl-use'
   const MEANINGFUL =
     'button,a,input,select,textarea,label,summary,canvas,[role="button"],[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"],[role="tab"],[role="switch"],[role="checkbox"],[role="option"],[role="slider"]'
   const CONTAINER =
@@ -46,16 +59,17 @@
 
   const state = {
     notes: [],
-    meta: {},
+    meta: tagMeta,
     trail: [],
     filter: 'all',
     panelOpen: false,
   }
-  window.__reviewLayer = state
+  window.ainotelayer = state
 
   let card = null
   let composer = null
   let panel = null
+  let picking = null
   let lastSlow = 0
   const pins = new Map()
 
@@ -84,7 +98,7 @@
   }
 
   const host = document.createElement('div')
-  host.setAttribute('data-review-layer', '')
+  host.setAttribute('data-ainotelayer', '')
   host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none'
   const root = host.attachShadow({ mode: 'open' })
   const style = document.createElement('style')
@@ -151,6 +165,11 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .group.path { text-transform: none; letter-spacing: 0; font-weight: 600; }
     .item.on { border-color: #6ea8fe; }
+    .pin.moved { outline: 2px dashed #f2c94c; outline-offset: 2px; }
+    .where a { color: #9ecbff; }
+    .warn { color: #f2c94c !important; }
+    .banner { position: fixed; top: 12px; left: 50%; translate: -50% 0; pointer-events: none; background: #f2c94c; color: #0b0d10;
+      font-size: 13px; font-weight: 700; padding: 8px 14px; border-radius: 999px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
     .hint { color: #f2c94c; font-size: 12px; margin-bottom: 8px; }
     .hl.pulse { animation: pulse .8s ease-out 2; }
     @keyframes pulse { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 75%, transparent); } to { box-shadow: 0 0 0 20px transparent; } }
@@ -181,7 +200,12 @@
     'Notes',
   )
   const floater = h('div', { class: 'float' }, dock)
-  ui.append(floater)
+  const banner = h(
+    'div',
+    { class: 'banner', style: 'display:none' },
+    'Click the element this note belongs to. Esc cancels.',
+  )
+  ui.append(floater, banner)
   root.append(style, highlight, pinLayer, ui)
 
   /**
@@ -215,6 +239,9 @@
 
   /** No content-type header: that keeps cross-origin writes free of a preflight */
   async function rest(pathname, method = 'GET', body) {
+    if (!SHARED) {
+      return localRest(pathname, method, body)
+    }
     const response = await fetch(urlOf(pathname), {
       method,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -223,6 +250,60 @@
       throw new Error(`${method} ${pathname}: ${response.status}`)
     }
     return response.json()
+  }
+
+  /** --- The same reads and writes against this browser's localStorage ------ */
+
+  function readLocal() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(LOCAL_KEY) ?? '{}')
+      return stored !== null && typeof stored === 'object' ? stored : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function putLocal(all, segments, value) {
+    let node = all
+    for (const segment of segments.slice(0, -1)) {
+      if (node[segment] === null || typeof node[segment] !== 'object') {
+        node[segment] = {}
+      }
+      node = node[segment]
+    }
+    const last = segments[segments.length - 1]
+    if (value === null || value === undefined) {
+      delete node[last]
+    } else {
+      node[last] = value
+    }
+  }
+
+  function localRest(pathname, method, body) {
+    const all = readLocal()
+    const segments = pathname.split('/').filter(Boolean)
+    if (method === 'GET') {
+      let node = all
+      for (const segment of segments) {
+        node = node !== null && typeof node === 'object' ? (node[segment] ?? null) : null
+      }
+      return node ?? null
+    }
+    let result = body ?? null
+    if (method === 'PATCH') {
+      for (const [key, value] of Object.entries(body ?? {})) {
+        putLocal(all, [...segments, ...key.split('/').filter(Boolean)], value)
+      }
+    } else if (method === 'POST') {
+      const name = `-${Date.now().toString(36).padStart(9, '0')}${Math.random().toString(36).slice(2, 10)}`
+      putLocal(all, [...segments, name], body)
+      result = { name }
+    } else {
+      putLocal(all, segments, method === 'DELETE' ? null : body)
+    }
+    /** Throws when the browser's storage is full or blocked; callers report it */
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(all))
+    return result
   }
 
   /** The database drops empty lists and may return lists as keyed objects */
@@ -247,6 +328,7 @@
         offset: anchor.offset ?? { x: 0.5, y: 0.5 },
         components: list(anchor.components),
         containers: list(anchor.containers),
+        source: list(anchor.source),
       },
       trail: list(raw.trail),
       messages: list(raw.messages).sort((a, b) => String(a.at).localeCompare(String(b.at))),
@@ -402,13 +484,135 @@
     return parts.join(' > ')
   }
 
+  /** React's record for the element, or for the nearest ancestor React renders */
+  function fiberOf(element) {
+    for (let node = element; node !== null; node = node.parentElement) {
+      const key = Object.keys(node).find((name) => name.startsWith('__reactFiber$'))
+      if (key !== undefined) {
+        return node[key]
+      }
+    }
+    return null
+  }
+
+  /** `Component@path/to/File.tsx:12:5`, as written by the build plugin (stamp.mjs) */
+  function parseStamp(value) {
+    const found = /^([^@]*)@(.+):(\d+):(\d+)$/.exec(value ?? '')
+    if (found === null) {
+      return null
+    }
+    return { in: found[1] || undefined, file: found[2], line: Number(found[3]), column: Number(found[4]) }
+  }
+
+  /**
+   * Where the element comes from in the source, nearest first: where the DOM
+   * element is written, then where each component around it is used. Empty
+   * unless the app was built with the ainotelayer build plugin.
+   */
+  function sourceOf(element) {
+    const chain = []
+    const add = (kind, value) => {
+      const parsed = typeof value === 'string' ? parseStamp(value) : null
+      const seen =
+        parsed !== null &&
+        chain.some((item) => item.file === parsed.file && item.line === parsed.line && item.column === parsed.column)
+      if (parsed !== null && !seen) {
+        chain.push({ kind, ...parsed })
+      }
+    }
+    let fiber = fiberOf(element)
+    if (fiber !== null) {
+      for (; fiber != null && chain.length < 6; fiber = fiber.return) {
+        const props = fiber.memoizedProps
+        if (props !== null && typeof props === 'object') {
+          add('element', props[SRC])
+          add('use', props[USE])
+        }
+      }
+    } else {
+      for (let node = element; node !== null && chain.length < 6; node = node.parentElement) {
+        add('element', node.getAttribute(SRC))
+        add('use', node.getAttribute(USE))
+      }
+    }
+    return chain.length > 0 ? chain : undefined
+  }
+
+  /** Text written directly in the element, not in its children */
+  function ownText(element) {
+    let text = ''
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += ` ${node.textContent}`
+      }
+    }
+    return tidy(text)
+  }
+
+  /** Text around the element: its row, card or field, whichever is closest */
+  function nearText(element) {
+    const own = tidy(element.textContent)
+    let node = element.parentElement
+    for (let depth = 0; node !== null && node !== document.body && depth < 3; depth += 1) {
+      const text = tidy(node.textContent)
+      if (text !== '' && text !== own) {
+        return text
+      }
+      node = node.parentElement
+    }
+    return ''
+  }
+
+  /** The heading or labelled region the element sits under */
+  function landmarkOf(element) {
+    let node = element.parentElement
+    for (let depth = 0; node !== null && node !== document.body && depth < 8; depth += 1) {
+      const named = node.getAttribute('aria-label')
+      if (named) {
+        return tidy(named)
+      }
+      const heading = node.querySelector('h1,h2,h3,h4,h5,h6,[role="heading"],legend')
+      const before =
+        heading !== null &&
+        !heading.contains(element) &&
+        (heading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+      if (before && tidy(heading.innerText) !== '') {
+        return tidy(heading.innerText)
+      }
+      node = node.parentElement
+    }
+    return ''
+  }
+
+  function hrefPath(element) {
+    const href = element.getAttribute('href')
+    if (!href) {
+      return null
+    }
+    try {
+      return new URL(href, location.href).pathname
+    } catch {
+      return null
+    }
+  }
+
+  /** Attributes that tend to stay the same while the layout around them changes */
+  function attrsOf(element) {
+    const picked = {
+      testid: element.getAttribute('data-testid'),
+      id: isStableId(element.id) ? element.id : null,
+      name: element.getAttribute('name'),
+      type: element.getAttribute('type'),
+      placeholder: element.getAttribute('placeholder'),
+      href: hrefPath(element),
+    }
+    const kept = Object.fromEntries(Object.entries(picked).filter(([, value]) => value))
+    return Object.keys(kept).length > 0 ? kept : undefined
+  }
+
   /** React component names from the element outwards, without library plumbing */
   function componentsOf(element) {
-    let fiber = null
-    for (let node = element; node !== null && fiber === null; node = node.parentElement) {
-      const key = Object.keys(node).find((name) => name.startsWith('__reactFiber$'))
-      fiber = key === undefined ? null : node[key]
-    }
+    let fiber = fiberOf(element)
     const names = []
     while (fiber != null && names.length < 8) {
       const type = fiber.type
@@ -525,6 +729,15 @@
       components: componentsOf(element),
       containers: containersOf(element),
       html: element.outerHTML.replace(/\s+/g, ' ').slice(0, 400),
+      text: ownText(element) || undefined,
+      attrs: attrsOf(element),
+      landmark: landmarkOf(element) || undefined,
+      near: nearText(element) || undefined,
+      stamp:
+        element.hasAttribute(SRC) || element.hasAttribute(USE)
+          ? { src: element.getAttribute(SRC) ?? undefined, use: element.getAttribute(USE) ?? undefined }
+          : undefined,
+      source: sourceOf(element),
     }
   }
 
@@ -552,6 +765,191 @@
       /** The page no longer has this structure */
     }
     return null
+  }
+
+  /**
+   * How well an element fits what the note recorded. `possible` is the most
+   * this anchor could score, so anchors with few signals are judged fairly.
+   */
+  function match(anchor, element) {
+    let score = 0
+    let possible = 0
+    /** How the name compares: same, partial, different, or none recorded */
+    let name = 'none'
+    let exactStamp = false
+    const same = (weight, wanted, got) => {
+      if (wanted === undefined || wanted === null || wanted === '') {
+        return
+      }
+      possible += weight
+      if (wanted === got) {
+        score += weight
+      }
+    }
+    /** A source stamp: same component and file is strong, the same line stronger */
+    const stamped = (weight, wanted, got) => {
+      const a = parseStamp(wanted)
+      if (a === null) {
+        return
+      }
+      possible += weight + 2
+      const b = parseStamp(got)
+      if (b !== null && a.file === b.file && a.in === b.in) {
+        const near = Math.abs(a.line - b.line) <= 5 ? 1 : 0
+        score += weight + (a.line === b.line ? 2 : near)
+        exactStamp = exactStamp || a.line === b.line
+      }
+    }
+    stamped(5, anchor.stamp?.src, element.getAttribute(SRC))
+    stamped(3, anchor.stamp?.use, element.getAttribute(USE))
+    /**
+     * Where the component around it is used: this tells apart elements that
+     * one shared component renders, such as the buttons of a toolbar.
+     */
+    const usedAt = list(anchor.source).find((entry) => entry.kind === 'use')
+    if (usedAt !== undefined) {
+      possible += 3
+      const mine = (sourceOf(element) ?? []).find((entry) => entry.kind === 'use')
+      if (mine !== undefined && mine.file === usedAt.file && mine.in === usedAt.in) {
+        score += 2 + (Math.abs(mine.line - usedAt.line) <= 2 ? 1 : 0)
+      }
+    }
+    const attrs = anchor.attrs ?? {}
+    same(6, attrs.testid, element.getAttribute('data-testid'))
+    same(5, attrs.id, element.id)
+    same(2, attrs.name, element.getAttribute('name'))
+    same(2, attrs.placeholder, element.getAttribute('placeholder'))
+    same(2, attrs.href, hrefPath(element))
+    same(1, attrs.type, element.getAttribute('type'))
+    same(1, anchor.role, element.getAttribute('role') || undefined)
+    if (anchor.label) {
+      possible += 4
+      const got = labelOf(element)
+      const firstWord = (text) => text.toLowerCase().split(' ')[0]
+      if (got === anchor.label) {
+        score += 4
+        name = 'same'
+      } else if (nameKey(got) === nameKey(anchor.label) || firstWord(got) === firstWord(anchor.label)) {
+        /** Renamed a little, or the name carries live state */
+        score += 2
+        name = 'partial'
+      } else {
+        /** A different name counts against it */
+        score -= got === '' ? 0 : 2
+        name = 'different'
+      }
+    }
+    same(2, anchor.text, ownText(element) || undefined)
+    /** What surrounds it tells identical controls apart, such as "Delete" in each row */
+    same(3, anchor.near, nearText(element) || undefined)
+    const components = componentsOf(element)
+    same(2, list(anchor.components)[0], components[0])
+    same(1, list(anchor.components)[1], components[1])
+    same(2, anchor.landmark, landmarkOf(element) || undefined)
+    return { score, possible, name, exactStamp }
+  }
+
+  function candidatesFor(anchor) {
+    const attribute = anchor.stamp?.src ? SRC : USE
+    const stampOf = parseStamp(anchor.stamp?.src ?? anchor.stamp?.use)
+    if (stampOf !== null) {
+      /** Elements written in the same file first: few, and the likeliest */
+      const near = document.querySelectorAll(
+        `${anchor.tag}[${attribute}*=${JSON.stringify(`@${stampOf.file}:`)}]`,
+      )
+      if (near.length > 0) {
+        return [...near]
+      }
+    }
+    return [...document.getElementsByTagName(anchor.tag)].slice(0, 800)
+  }
+
+  /** The one element that clearly fits the description, or null */
+  function search(anchor) {
+    let best = null
+    let bestScore = -Infinity
+    let second = -Infinity
+    let possible = 0
+    for (const element of candidatesFor(anchor)) {
+      if (host.contains(element)) {
+        continue
+      }
+      const result = match(anchor, element)
+      possible = result.possible
+      if (result.score > bestScore) {
+        second = bestScore
+        bestScore = result.score
+        best = element
+      } else if (result.score > second) {
+        second = result.score
+      }
+    }
+    if (best === null || possible === 0) {
+      return null
+    }
+    return bestScore / possible >= 0.6 && bestScore - second >= 2 ? { element: best, score: bestScore } : null
+  }
+
+  /** Counts changes to the page, so the wider search only reruns when something changed */
+  let domVersion = 0
+  new MutationObserver(() => {
+    domVersion += 1
+  }).observe(document.documentElement, { childList: true, subtree: true })
+
+  /** Being where the note says counts as evidence too, about as much as its name */
+  const PATH_CREDIT = 4
+
+  /**
+   * Find a note's element on the current page.
+   *   found:   where the note says it is, and it still fits the description
+   *   changed: where the note says, at the same source line, but renamed
+   *   moved:   recognised by its description somewhere else
+   * `changed` and `moved` are shown for the reviewer to confirm. `memo` (one
+   * per note) keeps the wider search from running on every tick.
+   */
+  function locate(anchor, memo = {}) {
+    const direct = resolve(anchor)
+    if (direct !== null) {
+      /** Re-check the fit only when the element or the page changed */
+      if (memo.direct !== direct || memo.directVersion !== domVersion) {
+        memo.direct = direct
+        memo.directVersion = domVersion
+        memo.fit = match(anchor, direct)
+      }
+      if (memo.fit.score >= memo.fit.possible) {
+        return { element: direct, how: 'found' }
+      }
+    }
+    /**
+     * The path leads nowhere, or to something that only partly fits: look
+     * wider, but not on every tick.
+     */
+    const now = performance.now()
+    const fresh = memo.version === domVersion || now - (memo.at ?? -Infinity) < 1500
+    if (!fresh || memo.at === undefined) {
+      memo.version = domVersion
+      memo.at = now
+      memo.wider = search(anchor)
+    }
+    const wider = memo.wider != null && memo.wider.element.isConnected ? memo.wider : null
+    const fit = direct === null ? null : memo.fit
+    let fits = fit !== null && (fit.score + PATH_CREDIT) / (fit.possible + PATH_CREDIT) >= 0.4
+    /**
+     * Same place but a different name is either a rename or another element
+     * that slid into a removed one's spot. Only the same source line tells
+     * them apart, so without it the note is treated as not found.
+     */
+    if (fits && fit.name === 'different' && !fit.exactStamp) {
+      fits = false
+    }
+    if (fits) {
+      /** The path still fits; only a clearly better match elsewhere overrides it */
+      if (wider !== null && wider.element !== direct && wider.score - fit.score >= 2) {
+        return { element: wider.element, how: 'moved' }
+      }
+      return { element: direct, how: fit.name === 'different' ? 'changed' : 'found' }
+    }
+    return wider === null ? null : { element: wider.element, how: 'moved' }
   }
 
   /** A picture of the slide viewport with a ring where the note was placed */
@@ -624,7 +1022,7 @@
 
   /** Not part of the reviewer's steps: the overlay's own UI, and presses it makes itself */
   function skipped(event) {
-    return !event.isTrusted || isOurs(event)
+    return !event.isTrusted || picking !== null || isOurs(event)
   }
 
   let pressed = null
@@ -668,6 +1066,9 @@
     }
   }, { capture: true, passive: true })
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && picking !== null) {
+      stopPicking()
+    }
     if (event.key === 'Escape' && (card !== null || composer !== null)) {
       closeCard()
       closeComposer()
@@ -751,7 +1152,7 @@
           onclick: () => (card !== null && card.id === note.id ? closeCard() : openCard(note.id)),
         })
         pinLayer.append(node)
-        pin = { node, element: null, visible: false }
+        pin = { node, element: null, visible: false, how: null, memo: {} }
         pins.set(note.id, pin)
       }
       pin.node.textContent = String(note.n)
@@ -766,7 +1167,7 @@
       }
     }
     const open = state.notes.filter((note) => note.status !== 'resolved').length
-    dock.textContent = `Notes · ${open} open`
+    dock.textContent = `Notes · ${open} unresolved`
     renderPanel()
     applyFloat()
   }
@@ -785,8 +1186,11 @@
         continue
       }
       if (slow || (pin.element !== null && !pin.element.isConnected)) {
-        pin.element = onThisPage(note) ? resolve(note.anchor) : null
+        const hit = onThisPage(note) ? locate(note.anchor, pin.memo) : null
+        pin.element = hit === null ? null : hit.element
+        pin.how = hit === null ? null : hit.how
         pin.visible = pin.element !== null && visibleAt(pin.element, note.anchor.offset)
+        pin.node.classList.toggle('moved', pin.how === 'moved' || pin.how === 'changed')
       }
       if (!pin.visible) {
         pin.node.style.display = 'none'
@@ -805,7 +1209,10 @@
       }
     }
     if (card !== null) {
-      card.hint.style.display = cardPinned ? 'none' : ''
+      const mode = cardPinned ? (pins.get(card.id)?.how ?? 'found') : 'away'
+      if (card.mode !== mode) {
+        card.setMode(mode)
+      }
     }
     if (card !== null && !cardPinned) {
       card.node.style.left = `${window.innerWidth - card.node.offsetWidth - 12}px`
@@ -839,6 +1246,43 @@
     return line
   }
 
+  /** Link to the file and line on GitHub, at the build the note was made on */
+  function sourceUrl(entry, note) {
+    const repo = state.meta.repo
+    const sha = note?.sha ?? state.meta.sha
+    return repo && sha ? `https://github.com/${repo}/blob/${sha}/${entry.file}#L${entry.line}` : null
+  }
+
+  function sourceText(entry) {
+    return `${entry.file.split('/').pop()}:${entry.line}`
+  }
+
+  /** "Switch.tsx:12 ← DisplayOptionRow.tsx:40": where it is written, then where that is used */
+  function sourceLine(anchor, note) {
+    const chain = list(anchor.source).slice(0, 2)
+    if (chain.length === 0) {
+      return null
+    }
+    const line = h('div', { class: 'where' })
+    chain.forEach((entry, index) => {
+      if (index > 0) {
+        line.append(' ← ')
+      }
+      const url = sourceUrl(entry, note)
+      const title = `${entry.kind === 'element' ? 'Written' : 'Used'} in ${entry.in ?? '?'}: ${entry.file}:${entry.line}`
+      line.append(
+        url === null
+          ? h('span', { title }, sourceText(entry))
+          : h('a', { href: url, target: '_blank', rel: 'noopener', title }, sourceText(entry)),
+      )
+    })
+    return line
+  }
+
+  function needsRecheck(note) {
+    return note.health?.state === 'missing' && (note.health.sha ?? null) === (state.meta.sha ?? null)
+  }
+
   function detailText(note) {
     const anchor = note.anchor
     const lines = [
@@ -847,6 +1291,13 @@
       `xpath: ${anchor.xpath}`,
       `selector: ${anchor.selector}`,
     ]
+    for (const entry of list(anchor.source)) {
+      const verb = entry.kind === 'element' ? 'written' : 'used'
+      lines.push(`source: ${entry.file}:${entry.line}:${entry.column} (${verb} in ${entry.in ?? '?'})`)
+    }
+    if (list(note.anchorHistory).length > 0) {
+      lines.push(`re-anchored: ${list(note.anchorHistory).length} time(s)`)
+    }
     if (anchor.components.length > 0) {
       lines.push(`components: ${anchor.components.join(' < ')}`)
     }
@@ -855,7 +1306,7 @@
       lines.push(`inside: ${container.role} "${container.label ?? ''}"${opener}`)
     }
     if (note.hasShot) {
-      lines.push(`screenshot: ${urlOf(`shots/${note.id}`)}`)
+      lines.push(`screenshot: ${shotRef(note)}`)
     }
     if (note.trail.length > 0) {
       lines.push('steps before the note:')
@@ -931,7 +1382,9 @@
     const kind = h('span', { class: 'tag' })
     const older = h('span', { class: 'tag', title: 'This note was made on an earlier build' })
     const where = h('div', {})
-    const hint = h('div', { class: 'hint', style: 'display:none' }, 'This element is not on the screen right now.')
+    const hintText = h('span', {})
+    const hintAction = h('button', { class: 'link' })
+    const hint = h('div', { class: 'hint', style: 'display:none' }, hintText, ' ', hintAction)
     const details = h('pre', {})
     const shot = h('img', {
       class: 'shot',
@@ -952,6 +1405,11 @@
       { class: 'foot' },
       !onThisPage(note) &&
         h('button', { class: 'link', onclick: () => reveal(note) }, 'Go to its page'),
+      h(
+        'button',
+        { class: 'link', title: 'Point this note at a different element', onclick: () => startPicking(id) },
+        'Re-attach',
+      ),
       h('span', { class: 'grow' }),
       h(
         'button',
@@ -995,7 +1453,28 @@
     card = {
       id,
       node,
-      hint,
+      mode: null,
+      /** found: nothing to say; moved: offer to update the note; away: offer to re-attach it */
+      setMode(mode) {
+        this.mode = mode
+        const current = state.notes.find((item) => item.id === id)
+        hint.style.display = mode === 'found' ? 'none' : ''
+        if (mode === 'moved' || mode === 'changed') {
+          hintText.textContent =
+            mode === 'moved'
+              ? 'Recognised by its description: it is not where it was when the note was made.'
+              : 'This element was renamed since the note was made. Check it is still the right one.'
+          hintAction.textContent = 'Update the note'
+          hintAction.onclick = () => keepWhereFound(id)
+        } else if (mode === 'away') {
+          hintText.textContent =
+            current !== undefined && needsRecheck(current)
+              ? 'This element could not be found on this build. It may have changed or been removed.'
+              : 'This element is not on the screen right now.'
+          hintAction.textContent = 'Re-attach'
+          hintAction.onclick = () => startPicking(id)
+        }
+      },
       update(next) {
         node.style.setProperty('--c', STATUS[next.status][1])
         status.value = next.status
@@ -1003,7 +1482,10 @@
         const stale = Boolean(next.sha && state.meta.sha && next.sha !== state.meta.sha)
         older.textContent = stale ? `build ${next.sha}` : ''
         older.style.display = stale ? '' : 'none'
-        where.replaceChildren(whereLine(next.anchor))
+        where.replaceChildren(...[whereLine(next.anchor), sourceLine(next.anchor, next)].filter(Boolean))
+        if (this.mode !== null) {
+          this.setMode(this.mode)
+        }
         details.textContent = detailText(next)
         messages.replaceChildren(
           ...next.messages.map((message) =>
@@ -1066,18 +1548,24 @@
       const id = crypto.randomUUID().slice(0, 8)
       const now = new Date().toISOString()
       const { shot, ...fields } = draft
-      await rest(`notes/${id}`, 'PUT', {
-        ...fields,
-        n: state.notes.reduce((max, note) => Math.max(max, note.n ?? 0), 0) + 1,
-        status: 'open',
-        kind,
-        scope: everywhere.checked ? 'app' : 'page',
-        createdAt: now,
-        branch: state.meta.branch ?? null,
-        sha: state.meta.sha ?? null,
-        hasShot: shot !== undefined,
-        messages: { first: { author: initials.value.trim() || 'anon', text: text.value.trim(), at: now } },
-      })
+      try {
+        await rest(`notes/${id}`, 'PUT', {
+          ...fields,
+          n: state.notes.reduce((max, note) => Math.max(max, note.n ?? 0), 0) + 1,
+          status: 'open',
+          kind,
+          scope: everywhere.checked ? 'app' : 'page',
+          createdAt: now,
+          branch: state.meta.branch ?? null,
+          sha: state.meta.sha ?? null,
+          hasShot: shot !== undefined,
+          messages: { first: { author: initials.value.trim() || 'anon', text: text.value.trim(), at: now } },
+        })
+      } catch (error) {
+        /** Keep the composer open so the text is not lost */
+        window.alert(`The note could not be saved: ${error.message}`)
+        return
+      }
       if (shot !== undefined) {
         await rest(`shots/${id}`, 'PUT', shot).catch(() => {})
       }
@@ -1095,6 +1583,7 @@
       { class: 'card' },
       h('div', { class: 'head' }, h('b', {}, 'New note'), h('span', { class: 'grow' }), h('button', { class: 'x', title: 'Cancel', onclick: closeComposer }, '×')),
       whereLine(draft.anchor),
+      sourceLine(draft.anchor, null),
       h('div', { class: 'chips' }, chips),
       text,
       h('label', { class: 'check' }, everywhere, 'Show on every page, not only this URL'),
@@ -1232,7 +1721,7 @@
     }
     closeComposer()
     const found = () => {
-      const element = resolve(note.anchor)
+      const element = locate(note.anchor)?.element ?? null
       return element !== null && isShown(element) ? element : null
     }
     let element = found()
@@ -1259,6 +1748,15 @@
       element.scrollIntoView({ block: 'center', inline: 'nearest' })
       await sleep(120)
     }
+    /** Remember, per build, that the element could not be found, so the list can say so */
+    const build = state.meta.sha ?? null
+    const known = note.health?.state === 'missing' && (note.health.sha ?? null) === build
+    if (element === null && document.readyState === 'complete' && !known) {
+      const health = { state: 'missing', sha: build, at: new Date().toISOString() }
+      rest(`notes/${note.id}`, 'PATCH', { health }).then(refresh).catch(() => {})
+    } else if (element !== null && note.health != null) {
+      rest(`notes/${note.id}`, 'PATCH', { health: null }).then(refresh).catch(() => {})
+    }
     openCard(note.id)
     lastSlow = 0
     pulseUntil = element === null ? 0 : performance.now() + 1700
@@ -1273,6 +1771,75 @@
         togglePanel()
       }
     }
+  }
+
+  /** --- Updating where a note points ---------------------------------------- */
+
+  async function saveAnchor(note, element, x, y) {
+    const old = note.anchor
+    const previous = {
+      xpath: old.xpath,
+      selector: old.selector,
+      label: old.label || undefined,
+      stamp: old.stamp,
+      sha: note.sha ?? undefined,
+      replacedAt: new Date().toISOString(),
+    }
+    await rest(`notes/${note.id}`, 'PATCH', {
+      anchor: describeAnchor(element, x, y),
+      anchorHistory: [...list(note.anchorHistory), previous].slice(-5),
+      health: null,
+    })
+    await refresh()
+  }
+
+  /** The note was recognised somewhere else: make that its new home */
+  function keepWhereFound(id) {
+    const note = state.notes.find((item) => item.id === id)
+    const pin = pins.get(id)
+    if (note === undefined || pin === undefined || pin.element === null) {
+      return
+    }
+    const rect = pin.element.getBoundingClientRect()
+    saveAnchor(
+      note,
+      pin.element,
+      rect.left + rect.width * note.anchor.offset.x,
+      rect.top + rect.height * note.anchor.offset.y,
+    )
+  }
+
+  /** Re-attach: the next click on the app picks the note's new element */
+  function startPicking(id) {
+    picking = id
+    closeCard()
+    banner.style.display = ''
+    document.documentElement.style.cursor = 'crosshair'
+  }
+
+  function stopPicking() {
+    picking = null
+    banner.style.display = 'none'
+    document.documentElement.style.cursor = ''
+  }
+
+  for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    document.addEventListener(type, (event) => {
+      if (picking === null || isOurs(event)) {
+        return
+      }
+      /** The app must not react to the click that picks an element */
+      event.preventDefault()
+      event.stopPropagation()
+      if (type !== 'click' || !(event.target instanceof Element)) {
+        return
+      }
+      const note = state.notes.find((item) => item.id === picking)
+      stopPicking()
+      if (note !== undefined) {
+        saveAnchor(note, event.target, event.clientX, event.clientY).then(() => openCard(note.id))
+      }
+    }, true)
   }
 
   /** --- The floating list of every note in the app ------------------------- */
@@ -1349,6 +1916,9 @@
       const name = String(opener?.label ?? '').split(' ').slice(0, 2).join(' ')
       where = opener ? ` · inside “${name}”` : ' · not on screen'
     }
+    if (needsRecheck(note)) {
+      where = ' · needs re-check'
+    }
     return h(
       'button',
       {
@@ -1360,7 +1930,7 @@
       h('span', { class: 't' }, `N${note.n} ${note.messages[0]?.text ?? ''}`),
       h(
         'span',
-        { class: 'm' },
+        { class: needsRecheck(note) ? 'm warn' : 'm' },
         `${note.kind} · ${note.messages[0]?.author ?? ''} · ${replies} ${replies === 1 ? 'reply' : 'replies'}${where}`,
       ),
     )
@@ -1426,6 +1996,23 @@
       },
       'Copy all as Markdown',
     )
+    const picker = h('input', {
+      type: 'file',
+      accept: 'application/json,.json',
+      style: 'display:none',
+      onchange: async () => {
+        const file = picker.files?.[0]
+        if (file === undefined) {
+          return
+        }
+        try {
+          const counts = await importData(JSON.parse(await file.text()))
+          window.alert(`Imported: ${counts.added} new, ${counts.updated} updated.`)
+        } catch (error) {
+          window.alert(`Could not import this file: ${error.message}`)
+        }
+      },
+    })
     const build = [state.meta.branch, state.meta.sha].filter(Boolean).join('@')
     const head = h(
       'div',
@@ -1441,7 +2028,17 @@
       head,
       h('div', { class: 'chips' }, chips),
       body,
-      h('div', { class: 'foot' }, h('span', { class: 'grow' }), copy),
+      picker,
+      !SHARED &&
+        h('div', { class: 'where' }, 'Kept in this browser only. Download to share them or hand them to an agent.'),
+      h(
+        'div',
+        { class: 'foot' },
+        h('button', { class: 'link', onclick: () => downloadNotes() }, 'Download'),
+        h('button', { class: 'link', onclick: () => picker.click() }, 'Import'),
+        h('span', { class: 'grow' }),
+        copy,
+      ),
     )
     floater.append(panel)
     makeDraggable(head)
@@ -1453,6 +2050,89 @@
     state.panelOpen = !state.panelOpen
     renderPanel()
   }
+
+  function shotRef(note) {
+    return SHARED ? urlOf(`shots/${note.id}`) : `shots.${note.id} in the downloaded notes file`
+  }
+
+  /** Everything about this review as one object: what a download or an agent gets */
+  async function exportData() {
+    return {
+      format: 'ainotelayer/1',
+      review: REVIEW,
+      meta: state.meta,
+      page: location.href,
+      exportedAt: new Date().toISOString(),
+      notes: (await rest('notes')) ?? {},
+      shots: (await rest('shots')) ?? {},
+    }
+  }
+  state.export = exportData
+
+  async function downloadNotes() {
+    const blob = new Blob([JSON.stringify(await exportData(), null, 2)], { type: 'application/json' })
+    const link = h('a', { href: URL.createObjectURL(blob), download: `ainotelayer-notes-${REVIEW}.json` })
+    ui.append(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(link.href), 10_000)
+  }
+
+  /**
+   * Merge a notes file into this review: new notes are added; for notes already
+   * here only new replies, the status and the resolution are taken, so an
+   * agent's answers come back without overwriting anything.
+   */
+  async function importData(data) {
+    const incoming = data?.notes
+    if (incoming === null || typeof incoming !== 'object') {
+      throw new Error('This file has no notes in it.')
+    }
+    const current = (await rest('notes')) ?? {}
+    const counts = { added: 0, updated: 0 }
+    for (const [id, note] of Object.entries(incoming)) {
+      if (note === null || typeof note !== 'object' || !note.createdAt) {
+        continue
+      }
+      const mine = current[id]
+      if (mine === undefined) {
+        await rest(`notes/${id}`, 'PUT', note)
+        const shot = data.shots?.[id]
+        if (typeof shot === 'string') {
+          await rest(`shots/${id}`, 'PUT', shot).catch(() => {})
+        }
+        counts.added += 1
+        continue
+      }
+      let changed = false
+      const patch = {}
+      for (const key of ['status', 'resolution']) {
+        if (note[key] !== undefined && note[key] !== mine[key]) {
+          patch[key] = note[key]
+        }
+      }
+      if (Object.keys(patch).length > 0) {
+        await rest(`notes/${id}`, 'PATCH', patch)
+        changed = true
+      }
+      for (const [messageId, message] of Object.entries(note.messages ?? {})) {
+        if (mine.messages?.[messageId] === undefined) {
+          await rest(`notes/${id}/messages/${messageId}`, 'PUT', message)
+          changed = true
+        }
+      }
+      counts.updated += changed ? 1 : 0
+    }
+    await refresh()
+    return counts
+  }
+  state.import = importData
+  /** For tests and for agents driving a browser: describe an element, find it again */
+  state.describe = (element) => {
+    const rect = element.getBoundingClientRect()
+    return describeAnchor(element, rect.left + rect.width / 2, rect.top + rect.height / 2)
+  }
+  state.locate = (anchor) => locate({ ...anchor, label: anchor.label ?? '' })
 
   /** The notes in the shape of a review doc: one section per observation */
   function exportMarkdown() {
@@ -1466,6 +2146,14 @@
       const inside = anchor.components.length > 0 ? `, in ${anchor.components.slice(0, 5).join(' < ')}` : ''
       lines.push(`- Element: ${anchor.role ?? anchor.tag} "${anchor.label}"${inside}`)
       lines.push(`- XPath: \`${anchor.xpath}\``, `- Selector: \`${anchor.selector}\``)
+      for (const entry of anchor.source) {
+        const verb = entry.kind === 'element' ? 'written' : 'used'
+        const url = sourceUrl(entry, note)
+        lines.push(`- Source: \`${entry.file}:${entry.line}\` (${verb} in ${entry.in ?? '?'})${url ? ` ${url}` : ''}`)
+      }
+      if (needsRecheck(note)) {
+        lines.push('- Needs re-check: the element was not found on this build')
+      }
       for (const container of anchor.containers) {
         const label = container.label ? ` "${container.label}"` : ''
         const opener = container.openedBy ? `, opened by "${container.openedBy.label}"` : ''
@@ -1476,7 +2164,7 @@
         note.trail.forEach((entry, index) => lines.push(`  ${index + 1}. ${stepText(entry)}`))
       }
       if (note.hasShot) {
-        lines.push(`- Screenshot (data URL): ${urlOf(`shots/${note.id}`)}`)
+        lines.push(`- Screenshot (data URL): ${shotRef(note)}`)
       }
       lines.push('- Thread:')
       for (const message of note.messages) {
@@ -1497,6 +2185,15 @@
 
   /** Live updates: other reviewers' notes and agents' replies appear as they land */
   function subscribe() {
+    if (!SHARED) {
+      /** Another tab of this browser changed the notes */
+      window.addEventListener('storage', (event) => {
+        if (event.key === LOCAL_KEY) {
+          refresh()
+        }
+      })
+      return
+    }
     if (typeof EventSource === 'undefined') {
       setInterval(() => {
         if (!document.hidden) {
@@ -1526,7 +2223,7 @@
   }, true)
 
   rest('meta').then((meta) => {
-    state.meta = meta ?? {}
+    state.meta = { ...tagMeta, ...(meta ?? {}) }
     renderPins()
   }).catch(() => {})
   refresh().then(() => {

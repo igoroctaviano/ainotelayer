@@ -6,9 +6,12 @@
  * to every HTML page. Deploy the directory as usual afterwards. The app's source
  * is not touched.
  *
- * With --db the notes are shared through a Firebase Realtime Database. Without
- * it nothing needs setting up: notes stay in each reviewer's browser and are
- * moved around with the overlay's Download and Import.
+ * Where notes are kept:
+ *   --github owner/name --pr 123   as comments on that pull request: no
+ *                                  database, and agents read and answer with gh
+ *   --db <url>                     in a Firebase Realtime Database
+ *   neither                        in each reviewer's browser, moved around with
+ *                                  the overlay's Download and Import
  *
  * Usage:
  *   node inject.mjs --dir build --app slim --key pr-451 --branch feat/x --sha abc1234
@@ -67,6 +70,11 @@ if (arg('dir') === '' || !fs.existsSync(dir)) {
   fail(`build directory not found: ${dir}`)
 }
 const shared = db !== ''
+/** A database, when given, wins over the pull request */
+const github =
+  !shared && arg('github') !== '' && arg('pr') !== ''
+    ? { repo: arg('github'), pr: arg('pr'), api: arg('github-api') || undefined }
+    : undefined
 if (shared && !/^https?:\/\//.test(db)) {
   fail('--db must be the database URL, for example https://<project>-default-rtdb.firebaseio.com')
 }
@@ -78,6 +86,7 @@ const base = `/${arg('base', '/').replace(/^\/+|\/+$/g, '')}/`.replace('//', '/'
 const meta = {
   app,
   key,
+  ...(github === undefined ? {} : { pr: github.pr }),
   repo: arg('repo') || undefined,
   branch: arg('branch') || undefined,
   sha: arg('sha').slice(0, 7) || undefined,
@@ -88,10 +97,14 @@ const meta = {
 const own = path.join(dir, '__ainotelayer')
 fs.mkdirSync(own, { recursive: true })
 fs.copyFileSync(path.join(here, 'overlay.js'), path.join(own, 'overlay.js'))
-fs.writeFileSync(path.join(own, 'agent.md'), agentGuide({ db, review, meta }))
-fs.writeFileSync(path.join(own, 'config.json'), `${JSON.stringify({ db, review, meta }, null, 2)}\n`)
+fs.writeFileSync(path.join(own, 'agent.md'), agentGuide({ db, review, meta, github }))
+fs.writeFileSync(path.join(own, 'config.json'), `${JSON.stringify({ db, review, meta, github }, null, 2)}\n`)
 
-const where = shared ? ` data-db="${attribute(db)}"` : ''
+let where = shared ? ` data-db="${attribute(db)}"` : ''
+if (github !== undefined) {
+  const api = github.api ? ` data-github-api="${attribute(github.api)}"` : ''
+  where = ` data-github="${attribute(github.repo)}" data-pr="${attribute(github.pr)}"${api}`
+}
 const tag = `<script src="${base}__ainotelayer/overlay.js"${where} data-review="${attribute(review)}" data-meta="${attribute(JSON.stringify(meta))}" defer></script>`
 const existing = /<script[^>]*__ainotelayer\/overlay\.js[^>]*><\/script>/
 let pages = 0
@@ -125,7 +138,13 @@ if (shared && !process.argv.includes('--no-register')) {
 
 console.log(`ainotelayer: overlay added to ${pages} page(s) in ${dir}`)
 console.log(`ainotelayer: review id   ${review}`)
-console.log(`ainotelayer: notes       ${shared ? restUrl(db, review, 'notes') : "in each reviewer's browser (no database set)"}`)
+let notesAt = "in each reviewer's browser (no database set)"
+if (shared) {
+  notesAt = restUrl(db, review, 'notes')
+} else if (github !== undefined) {
+  notesAt = `comments on https://github.com/${github.repo}/pull/${github.pr}`
+}
+console.log(`ainotelayer: notes       ${notesAt}`)
 console.log(`ainotelayer: agent page  <preview url>${base}__ainotelayer/agent.md`)
 
 if (process.env.GITHUB_OUTPUT) {

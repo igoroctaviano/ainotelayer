@@ -20,9 +20,19 @@
    * REST dialect. Without it they stay in this browser's localStorage, so the
    * layer works with nothing set up; download and import move them around.
    * data-review names the review; data-meta carries the build info.
+   *
+   * With data-github ("owner/name") and data-pr the notes are comments on that
+   * pull request instead: no database, readable without sign-in on a public
+   * repository, written with the reviewer's own GitHub account.
    */
   const tag = document.currentScript
   const SHARED = Boolean(tag?.dataset.db)
+  const GH_REPO = tag?.dataset.github ?? ''
+  const GH_PR = tag?.dataset.pr ?? ''
+  const GH_API = (tag?.dataset.githubApi ?? 'https://api.github.com').replace(/\/$/, '')
+  const GITHUB = !SHARED && GH_REPO !== '' && GH_PR !== ''
+  const GH_TOKEN = 'ainotelayer-gh-token'
+  const GH_LOGIN = 'ainotelayer-gh-login'
   const [DB, DB_QUERY] = (tag?.dataset.db ?? '').split('?')
   const REVIEW = tag?.dataset.review ?? 'default'
   const LOCAL_KEY = `ainotelayer:${REVIEW}`
@@ -127,7 +137,7 @@
     .msg .by { font-weight: 700; margin-right: 6px; }
     .msg.agent .by { color: #c4a7ff; }
     .msg time { float: right; color: #6b7480; font-size: 11px; }
-    textarea, input[type="text"], select { width: 100%; background: #0d0f13; color: #e8eaed; border: 1px solid #2c313a; border-radius: 6px;
+    textarea, input[type="text"], input[type="password"], select { width: 100%; background: #0d0f13; color: #e8eaed; border: 1px solid #2c313a; border-radius: 6px;
       padding: 6px 8px; font-size: 13px; }
     textarea { resize: vertical; min-height: 54px; }
     textarea:focus, input:focus, select:focus, button:focus-visible { outline: 2px solid #6ea8fe; outline-offset: 1px; }
@@ -165,6 +175,8 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .group.path { text-transform: none; letter-spacing: 0; font-weight: 600; }
     .item.on { border-color: #6ea8fe; }
+    .connect { left: 50%; top: 14%; translate: -50% 0; width: 400px; }
+    .foot a { color: #9aa4b2; }
     .pin.moved { outline: 2px dashed #f2c94c; outline-offset: 2px; }
     .where a { color: #9ecbff; }
     .warn { color: #f2c94c !important; }
@@ -239,6 +251,9 @@
 
   /** No content-type header: that keeps cross-origin writes free of a preflight */
   async function rest(pathname, method = 'GET', body) {
+    if (GITHUB) {
+      return githubRest(pathname, method, body)
+    }
     if (!SHARED) {
       return localRest(pathname, method, body)
     }
@@ -250,6 +265,507 @@
       throw new Error(`${method} ${pathname}: ${response.status}`)
     }
     return response.json()
+  }
+
+  /** --- Notes kept in a GitHub pull request ------------------------------- */
+
+  /**
+   * In GitHub mode every note is a comment on the pull request. Nothing is
+   * ever edited: a reply, a status change or a re-attach is one more comment,
+   * and the notes are rebuilt from the comments in order. That needs no
+   * database, works with GitHub's rule that people only edit their own
+   * comments, and lets people and agents answer from GitHub itself by starting
+   * a comment with the note's number: `N3: fixed in abc123 [fix in place]`.
+   */
+  const gh = {
+    comments: new Map(),
+    loaded: false,
+    polledAt: 0,
+    polls: 0,
+    since: '',
+    problem: '',
+    login: '',
+    health: {},
+  }
+
+  function ghToken() {
+    try {
+      return sessionStorage.getItem(GH_TOKEN) || localStorage.getItem(GH_TOKEN) || ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function ghFetch(pathname, options = {}) {
+    const token = ghToken()
+    const headers = { Accept: 'application/vnd.github+json' }
+    if (token !== '') {
+      headers.Authorization = `Bearer ${token}`
+    }
+    if (options.body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+    }
+    const response = await fetch(`${GH_API}${pathname}`, {
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    })
+    if (!response.ok) {
+      const spent = response.headers.get('x-ratelimit-remaining') === '0'
+      let problem = `GitHub answered ${response.status}.`
+      if (spent) {
+        problem = token === ''
+          ? "GitHub's hourly allowance for reading without sign-in is used up. Connect GitHub to keep going."
+          : "GitHub's hourly allowance is used up. Try again later."
+      } else if (response.status === 401) {
+        problem = 'GitHub did not accept the saved token. Connect again.'
+      } else if (response.status === 404) {
+        problem = token === ''
+          ? 'This pull request was not found. If the repository is private, connect GitHub.'
+          : 'This pull request was not found, or the token cannot see it.'
+      } else if (response.status === 403) {
+        problem = 'GitHub refused: the token is not allowed to do this here.'
+      }
+      const error = new Error(problem)
+      error.status = response.status
+      throw error
+    }
+    return response.status === 204 ? null : response.json()
+  }
+
+  /** JSON inside an HTML comment: it must never contain the closing `-->` */
+  function hiddenBlock(kind, data) {
+    const json = JSON.stringify(data).replace(/--/g, '-\\u002d').replace(/>/g, '\\u003e')
+    return `<!-- ainotelayer:${kind} ${json} -->`
+  }
+
+  function readHidden(body) {
+    const found = /<!-- ainotelayer:(note|event) ([\s\S]*?) -->/.exec(body ?? '')
+    if (found === null) {
+      return null
+    }
+    try {
+      return { kind: found[1], data: JSON.parse(found[2]) }
+    } catch {
+      return null
+    }
+  }
+
+  const STATUS_TAG = { open: '[open]', fix: '[fix in place]', resolved: '[resolved]' }
+
+  /** What people see on GitHub for a note, with the note's data hidden below it */
+  function noteBody(note, number) {
+    const anchor = note.anchor ?? {}
+    const name = anchor.label ? ` “${anchor.label}”` : ''
+    const first = list(anchor.source)[0]
+    const from = first === undefined ? '' : ` · \`${first.file.split('/').pop()}:${first.line}\``
+    const quoted = String(note.text ?? '').split('\n').map((line) => `> ${line}`).join('\n')
+    const link = note.url ? `[Open in the preview](${note.url}${note.url.includes('#') ? '' : `#ainote=${note.id}`})` : ''
+    const build = note.sha ? ` · build \`${note.sha}\`` : ''
+    return [
+      `**Note N${number}** · ${note.kind} · ${anchor.role ?? anchor.tag ?? 'element'}${name}${from}`,
+      '',
+      quoted,
+      '',
+      `${link}${build}`,
+      '',
+      hiddenBlock('note', note),
+    ].join('\n')
+  }
+
+  /** A reply, a status change or a re-attach: one line a person could also type by hand */
+  function eventBody(number, text, data) {
+    const tag = data.status === undefined ? '' : ` ${STATUS_TAG[data.status] ?? ''}`
+    return `N${number}: ${text}${tag}\n\n${hiddenBlock('event', data)}`
+  }
+
+  /**
+   * Rebuild the notes from the pull request's comments, oldest first. Comments
+   * that are neither a note nor addressed to one (`N3: …`) are ignored.
+   */
+  function foldComments(comments) {
+    const ordered = [...comments].sort(
+      (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id,
+    )
+    const notes = {}
+    const shots = {}
+    const byNumber = {}
+    let count = 0
+    for (const comment of ordered) {
+      const hidden = readHidden(comment.body)
+      const login = comment.user?.login ?? 'someone'
+      if (hidden !== null && hidden.kind === 'note' && hidden.data?.id) {
+        const { shot, text, by, ...fields } = hidden.data
+        count += 1
+        byNumber[count] = fields.id
+        if (typeof shot === 'string') {
+          shots[fields.id] = shot
+        }
+        notes[fields.id] = {
+          ...fields,
+          n: count,
+          status: 'open',
+          createdAt: comment.created_at,
+          hasShot: typeof shot === 'string',
+          commentId: comment.id,
+          commentUrl: comment.html_url,
+          messages: {
+            first: { author: by ? `${by} (via @${login})` : `@${login}`, text: text ?? '', at: comment.created_at },
+          },
+        }
+        continue
+      }
+      /** Not a note: is it addressed to one, by hidden id or by "N3:" at the start? */
+      const visible = String(comment.body ?? '').replace(/<!-- ainotelayer:[\s\S]*?-->/g, '').trim()
+      const addressed = /^N(\d+)\b\s*[:\-–—]?\s*/.exec(visible)
+      const data = hidden !== null && hidden.kind === 'event' ? hidden.data : {}
+      const id = data.note ?? (addressed === null ? undefined : byNumber[Number(addressed[1])])
+      const note = id === undefined ? undefined : notes[id]
+      if (note === undefined) {
+        continue
+      }
+      let text = addressed === null ? visible : visible.slice(addressed[0].length)
+      let status = data.status
+      const tagged = /\[(open|fix in place|fix|fixed|resolved)\]/i.exec(text)
+      if (tagged !== null) {
+        const word = tagged[1].toLowerCase()
+        status = status ?? (word === 'open' ? 'open' : word === 'resolved' ? 'resolved' : 'fix')
+        text = text.replace(tagged[0], '').trim()
+      }
+      const agent = data.agent === true || /\[agent\]/i.test(text)
+      text = text.replace(/\[agent\]/gi, '').trim()
+      if (status in STATUS) {
+        note.status = status
+      }
+      if (data.resolution !== undefined) {
+        note.resolution = data.resolution
+      }
+      if (data.anchor !== undefined) {
+        note.anchorHistory = [
+          ...list(note.anchorHistory),
+          { xpath: note.anchor?.xpath, selector: note.anchor?.selector, label: note.anchor?.label, replacedAt: comment.created_at },
+        ].slice(-5)
+        note.anchor = data.anchor
+      }
+      if (text === '' && status in STATUS) {
+        text = `Status: ${STATUS[status][0]}`
+      }
+      if (text !== '') {
+        note.messages[`c${comment.id}`] = {
+          author: data.by ? `${data.by} (via @${login})` : `@${login}`,
+          text,
+          at: comment.created_at,
+          ...(agent ? { agent: true } : {}),
+        }
+      }
+    }
+    for (const [id, health] of Object.entries(gh.health)) {
+      if (notes[id] !== undefined) {
+        notes[id].health = health
+      }
+    }
+    return { notes, shots }
+  }
+
+  /** Bring the comment list up to date: everything once, then only what changed */
+  async function ghLoad(force) {
+    const now = Date.now()
+    if (!force && gh.loaded && now - gh.polledAt < 2000) {
+      return
+    }
+    gh.polledAt = now
+    gh.polls += 1
+    /** A full reload now and then also notices deleted comments */
+    const full = force || !gh.loaded || gh.polls % 10 === 0
+    const base = `/repos/${GH_REPO}/issues/${GH_PR}/comments?per_page=100`
+    try {
+      const fresh = []
+      for (let page = 1; page <= 20; page += 1) {
+        const since = full || gh.since === '' ? '' : `&since=${encodeURIComponent(gh.since)}`
+        const batch = await ghFetch(`${base}&page=${page}${since}`)
+        fresh.push(...batch)
+        if (batch.length < 100) {
+          break
+        }
+      }
+      if (full) {
+        gh.comments.clear()
+      }
+      for (const comment of fresh) {
+        gh.comments.set(comment.id, comment)
+        if (String(comment.updated_at) > gh.since) {
+          gh.since = comment.updated_at
+        }
+      }
+      gh.loaded = true
+      gh.problem = ''
+    } catch (error) {
+      gh.problem = error.message
+      throw error
+    }
+  }
+
+  /** Writing needs a GitHub account: ask for one instead of failing silently */
+  function ghRequireToken() {
+    if (ghToken() !== '') {
+      return
+    }
+    openConnect()
+    const error = new Error('Connect GitHub to add or change notes.')
+    error.connect = true
+    throw error
+  }
+
+  async function ghPost(body) {
+    ghRequireToken()
+    const comment = await ghFetch(`/repos/${GH_REPO}/issues/${GH_PR}/comments`, { method: 'POST', body: { body } })
+    gh.comments.set(comment.id, comment)
+    return comment
+  }
+
+  /** A smaller copy of the slide picture, so it fits inside a comment */
+  async function shrinkShot(dataUrl) {
+    try {
+      const image = new Image()
+      image.src = dataUrl
+      await image.decode()
+      for (const [width, quality] of [[420, 0.5], [300, 0.4]]) {
+        const scale = Math.min(1, width / image.naturalWidth)
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(image.naturalWidth * scale)
+        canvas.height = Math.round(image.naturalHeight * scale)
+        canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height)
+        const small = canvas.toDataURL('image/webp', quality)
+        if (small.length <= 24_000) {
+          return small
+        }
+      }
+    } catch {
+      /** No picture is better than no note */
+    }
+    return undefined
+  }
+
+  /** The storage calls the rest of the overlay makes, answered from the pull request */
+  async function githubRest(pathname, method, body) {
+    const [area, id, sub] = pathname.split('/')
+    if (method === 'GET') {
+      if (area === 'meta') {
+        return null
+      }
+      if (area === 'notes') {
+        await ghLoad(false)
+      }
+      const folded = foldComments(gh.comments.values())
+      const tree = area === 'shots' ? folded.shots : folded.notes
+      return id === undefined ? tree : (tree[id] ?? null)
+    }
+    if (area === 'shots') {
+      /** The picture travels inside the note's own comment */
+      return null
+    }
+    const current = foldComments(gh.comments.values()).notes[id]
+    if (method === 'PUT' && sub === undefined) {
+      const { messages, n, status, hasShot, createdAt, health, shot, ...fields } = body
+      const first = messages?.first ?? {}
+      const data = { ...fields, id, text: first.text ?? '' }
+      if (first.author && first.author !== `@${gh.login}`) {
+        data.by = first.author
+      }
+      if (typeof shot === 'string') {
+        data.shot = await shrinkShot(shot)
+      }
+      const number = Object.keys(foldComments(gh.comments.values()).notes).length + 1
+      let text = noteBody(data, number)
+      if (text.length > 60_000) {
+        /** Drop the picture, then the steps, before giving up on the note */
+        delete data.shot
+        text = noteBody(data, number)
+      }
+      if (text.length > 60_000) {
+        data.trail = list(data.trail).slice(-5)
+        text = noteBody(data, number)
+      }
+      await ghPost(text)
+      return body
+    }
+    if (current === undefined) {
+      throw new Error('This note is no longer on the pull request.')
+    }
+    if (method === 'DELETE') {
+      ghRequireToken()
+      try {
+        await ghFetch(`/repos/${GH_REPO}/issues/comments/${current.commentId}`, { method: 'DELETE' })
+      } catch (error) {
+        if (error.status === 403 || error.status === 404) {
+          throw new Error('Only its author or a maintainer can delete this note on GitHub.')
+        }
+        throw error
+      }
+      gh.comments.delete(current.commentId)
+      return null
+    }
+    if (sub === 'messages') {
+      /** A reply; an imported one keeps its original author's name */
+      const data = { note: id }
+      if (method === 'PUT' && body.author) {
+        data.by = body.author
+      }
+      if (body.agent === true) {
+        data.agent = true
+      }
+      await ghPost(eventBody(current.n, body.text ?? '', data))
+      return body
+    }
+    if (method === 'PATCH') {
+      if ('health' in body && Object.keys(body).length === 1) {
+        /** Whether this browser found the element is not worth a comment on the pull request */
+        if (body.health === null) {
+          delete gh.health[id]
+        } else {
+          gh.health[id] = body.health
+        }
+        return body
+      }
+      delete gh.health[id]
+      const data = { note: id }
+      let text = ''
+      if (body.status !== undefined) {
+        data.status = body.status
+      }
+      if (body.resolution !== undefined) {
+        data.resolution = body.resolution
+        text = String(body.resolution)
+      }
+      if (body.anchor !== undefined) {
+        data.anchor = body.anchor
+        const label = body.anchor.label ? ` “${body.anchor.label}”` : ''
+        text = `re-attached to ${body.anchor.role ?? body.anchor.tag}${label}.`
+      }
+      await ghPost(eventBody(current.n, text, data))
+      return body
+    }
+    throw new Error(`Not supported on a pull request: ${method} ${pathname}`)
+  }
+
+  /** --- Connect GitHub: a token the reviewer pastes once ------------------- */
+
+  let connectCard = null
+
+  function closeConnect() {
+    if (connectCard !== null) {
+      connectCard.remove()
+      connectCard = null
+    }
+  }
+
+  function ghDisconnect() {
+    try {
+      sessionStorage.removeItem(GH_TOKEN)
+      localStorage.removeItem(GH_TOKEN)
+      localStorage.removeItem(GH_LOGIN)
+    } catch {
+      /** Nothing was stored */
+    }
+    gh.login = ''
+    renderPins()
+  }
+
+  function openConnect() {
+    closeConnect()
+    const input = h('input', { type: 'password', placeholder: 'Paste a GitHub token', autocomplete: 'off' })
+    const forget = h('input', { type: 'checkbox' })
+    const problem = h('div', { class: 'hint', style: 'display:none' })
+    const connect = async () => {
+      const token = input.value.trim()
+      if (token === '') {
+        input.focus()
+        return
+      }
+      problem.style.display = 'none'
+      try {
+        const response = await fetch(`${GH_API}/user`, {
+          headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) {
+          throw new Error(`GitHub did not accept this token (${response.status}).`)
+        }
+        const user = await response.json()
+        gh.login = user.login ?? ''
+        if (forget.checked) {
+          sessionStorage.setItem(GH_TOKEN, token)
+        } else {
+          localStorage.setItem(GH_TOKEN, token)
+        }
+        localStorage.setItem(GH_LOGIN, gh.login)
+        closeConnect()
+        await ghLoad(true).catch(() => {})
+        refresh()
+      } catch (error) {
+        problem.textContent = error.message
+        problem.style.display = ''
+      }
+    }
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        connect()
+      }
+    })
+    const link = (text, href) => h('a', { href, target: '_blank', rel: 'noopener' }, text)
+    connectCard = h(
+      'div',
+      { class: 'card connect' },
+      h('div', { class: 'head' }, h('b', {}, 'Connect GitHub'), h('span', { class: 'grow' }), h('button', { class: 'x', title: 'Cancel', onclick: closeConnect }, '×')),
+      h(
+        'div',
+        { class: 'where' },
+        `Notes for this preview are comments on pull request #${GH_PR} in ${GH_REPO}. Reading them needs no sign-in. To add a note or reply, paste a GitHub token: your notes are then posted under your own account.`,
+      ),
+      h(
+        'div',
+        { class: 'where' },
+        link('Create a token for this repository only', 'https://github.com/settings/personal-access-tokens/new'),
+        `: choose “Only select repositories”, pick ${GH_REPO}, and give “Pull requests” read and write access. A short expiry is safer. Or `,
+        link('a classic token', 'https://github.com/settings/tokens/new?scopes=public_repo&description=ainotelayer'),
+        ' with the public_repo scope.',
+      ),
+      input,
+      h('label', { class: 'check' }, forget, 'Forget it when I close this tab'),
+      h(
+        'div',
+        { class: 'where', style: 'margin-top:8px' },
+        'The token is kept in this browser and sent only to GitHub. This preview page can read it, so use one limited to this repository.',
+      ),
+      problem,
+      h(
+        'div',
+        { class: 'row' },
+        h('span', { class: 'grow' }),
+        h('button', { onclick: closeConnect }, 'Cancel'),
+        h('button', { class: 'primary', onclick: connect }, 'Connect'),
+      ),
+    )
+    ui.append(connectCard)
+    input.focus()
+  }
+
+  /** What the notes list says about where notes live and who you are */
+  function githubLine() {
+    const pull = h(
+      'a',
+      { href: `https://github.com/${GH_REPO}/pull/${GH_PR}`, target: '_blank', rel: 'noopener' },
+      `pull request #${GH_PR}`,
+    )
+    const line = h('div', { class: 'where' }, 'Notes are comments on ', pull, '. ')
+    if (ghToken() === '') {
+      line.append('Reading without sign-in. ', h('button', { class: 'link', onclick: openConnect }, 'Connect GitHub'), ' to add notes.')
+    } else {
+      line.append(`Signed in as @${gh.login || '…'}. `, h('button', { class: 'link', onclick: ghDisconnect }, 'Disconnect'))
+    }
+    if (gh.problem !== '') {
+      line.append(h('div', { class: 'hint', style: 'margin:6px 0 0' }, gh.problem))
+    }
+    return line
   }
 
   /** --- The same reads and writes against this browser's localStorage ------ */
@@ -1315,7 +1831,18 @@
     return lines.join('\n')
   }
 
+  /** A failed write: say why, unless the sign-in dialog is already asking */
+  function explain(error, what) {
+    if (error?.connect !== true) {
+      window.alert(`${what}: ${error?.message ?? error}`)
+    }
+  }
+
   function author() {
+    if (GITHUB) {
+      ghRequireToken()
+      return `@${gh.login}`
+    }
     let name = storage(WHO)
     if (name === '') {
       name = (window.prompt('Your initials, shown next to your notes') ?? '').trim()
@@ -1355,7 +1882,11 @@
       {
         title: 'Status',
         onchange: async () => {
-          await rest(`notes/${id}`, 'PATCH', { status: status.value })
+          try {
+            await rest(`notes/${id}`, 'PATCH', { status: status.value })
+          } catch (error) {
+            explain(error, 'The status could not be changed')
+          }
           refresh()
         },
       },
@@ -1367,11 +1898,17 @@
         return
       }
       reply.value = ''
-      await rest(`notes/${id}/messages`, 'POST', {
-        author: author(),
-        text,
-        at: new Date().toISOString(),
-      })
+      try {
+        await rest(`notes/${id}/messages`, 'POST', {
+          author: author(),
+          text,
+          at: new Date().toISOString(),
+        })
+      } catch (error) {
+        /** Put the text back so it is not lost */
+        reply.value = text
+        explain(error, 'The reply could not be sent')
+      }
       refresh()
     }
     reply.addEventListener('keydown', (event) => {
@@ -1410,6 +1947,7 @@
         { class: 'link', title: 'Point this note at a different element', onclick: () => startPicking(id) },
         'Re-attach',
       ),
+      note.commentUrl && h('a', { href: note.commentUrl, target: '_blank', rel: 'noopener' }, 'On GitHub'),
       h('span', { class: 'grow' }),
       h(
         'button',
@@ -1417,11 +1955,15 @@
           class: 'link',
           onclick: async () => {
             if (window.confirm(`Delete note N${note.n} and its thread?`)) {
-              await rest(`notes/${id}`, 'DELETE')
-              if (note.hasShot) {
-                await rest(`shots/${id}`, 'DELETE')
+              try {
+                await rest(`notes/${id}`, 'DELETE')
+                if (note.hasShot) {
+                  await rest(`shots/${id}`, 'DELETE')
+                }
+                closeCard()
+              } catch (error) {
+                explain(error, 'The note could not be deleted')
               }
-              closeCard()
               refresh()
             }
           },
@@ -1549,8 +2091,11 @@
       const now = new Date().toISOString()
       const { shot, ...fields } = draft
       try {
+        const by = GITHUB ? author() : initials.value.trim() || 'anon'
         await rest(`notes/${id}`, 'PUT', {
           ...fields,
+          /** On a pull request the picture travels inside the note's comment */
+          ...(GITHUB && shot !== undefined ? { shot } : {}),
           n: state.notes.reduce((max, note) => Math.max(max, note.n ?? 0), 0) + 1,
           status: 'open',
           kind,
@@ -1559,11 +2104,11 @@
           branch: state.meta.branch ?? null,
           sha: state.meta.sha ?? null,
           hasShot: shot !== undefined,
-          messages: { first: { author: initials.value.trim() || 'anon', text: text.value.trim(), at: now } },
+          messages: { first: { author: by, text: text.value.trim(), at: now } },
         })
       } catch (error) {
         /** Keep the composer open so the text is not lost */
-        window.alert(`The note could not be saved: ${error.message}`)
+        explain(error, 'The note could not be saved')
         return
       }
       if (shot !== undefined) {
@@ -1590,7 +2135,7 @@
       h(
         'div',
         { class: 'row' },
-        initials,
+        GITHUB ? h('span', { class: 'tag' }, gh.login ? `@${gh.login}` : 'not signed in') : initials,
         h('span', { class: 'grow' }),
         h('button', { onclick: closeComposer }, 'Cancel'),
         h('button', { class: 'primary', onclick: save }, 'Add note'),
@@ -1785,11 +2330,15 @@
       sha: note.sha ?? undefined,
       replacedAt: new Date().toISOString(),
     }
-    await rest(`notes/${note.id}`, 'PATCH', {
-      anchor: describeAnchor(element, x, y),
-      anchorHistory: [...list(note.anchorHistory), previous].slice(-5),
-      health: null,
-    })
+    try {
+      await rest(`notes/${note.id}`, 'PATCH', {
+        anchor: describeAnchor(element, x, y),
+        anchorHistory: [...list(note.anchorHistory), previous].slice(-5),
+        health: null,
+      })
+    } catch (error) {
+      explain(error, 'The note could not be moved')
+    }
     await refresh()
   }
 
@@ -2029,11 +2578,14 @@
       h('div', { class: 'chips' }, chips),
       body,
       picker,
-      !SHARED &&
+      GITHUB && githubLine(),
+      !GITHUB &&
+        !SHARED &&
         h('div', { class: 'where' }, 'Kept in this browser only. Download to share them or hand them to an agent.'),
       h(
         'div',
         { class: 'foot' },
+        GITHUB && h('button', { class: 'link', onclick: () => ghLoad(true).then(refresh, refresh) }, 'Refresh'),
         h('button', { class: 'link', onclick: () => downloadNotes() }, 'Download'),
         h('button', { class: 'link', onclick: () => picker.click() }, 'Import'),
         h('span', { class: 'grow' }),
@@ -2052,6 +2604,9 @@
   }
 
   function shotRef(note) {
+    if (GITHUB) {
+      return `inside the note's comment on the pull request (${note.commentUrl ?? ''})`
+    }
     return SHARED ? urlOf(`shots/${note.id}`) : `shots.${note.id} in the downloaded notes file`
   }
 
@@ -2096,10 +2651,21 @@
       }
       const mine = current[id]
       if (mine === undefined) {
-        await rest(`notes/${id}`, 'PUT', note)
         const shot = data.shots?.[id]
+        await rest(`notes/${id}`, 'PUT', GITHUB && typeof shot === 'string' ? { ...note, shot } : note)
         if (typeof shot === 'string') {
           await rest(`shots/${id}`, 'PUT', shot).catch(() => {})
+        }
+        if (GITHUB) {
+          /** A pull request holds one comment per message, so the rest of the thread follows */
+          for (const [messageId, message] of Object.entries(note.messages ?? {})) {
+            if (messageId !== 'first') {
+              await rest(`notes/${id}/messages/${messageId}`, 'PUT', message)
+            }
+          }
+          if (note.status !== undefined && note.status !== 'open') {
+            await rest(`notes/${id}`, 'PATCH', { status: note.status })
+          }
         }
         counts.added += 1
         continue
@@ -2133,6 +2699,8 @@
     return describeAnchor(element, rect.left + rect.width / 2, rect.top + rect.height / 2)
   }
   state.locate = (anchor) => locate({ ...anchor, label: anchor.label ?? '' })
+  /** The pull-request format, for tests and for tools that write notes */
+  state.github = { noteBody, eventBody, fold: (comments) => foldComments(comments) }
 
   /** The notes in the shape of a review doc: one section per observation */
   function exportMarkdown() {
@@ -2179,12 +2747,26 @@
     try {
       applyChange('/', await rest('notes'), false)
     } catch {
-      /** The database may be unreachable for a moment; the stream catches up */
+      /** The store may be unreachable for a moment; the next refresh catches up */
+      if (GITHUB) {
+        /** Show why in the notes list */
+        renderPins()
+      }
     }
   }
 
   /** Live updates: other reviewers' notes and agents' replies appear as they land */
   function subscribe() {
+    if (GITHUB) {
+      /** GitHub does not push changes: ask again, sparingly without sign-in (60 requests an hour) */
+      setInterval(() => {
+        const every = ghToken() === '' ? 180_000 : 20_000
+        if (!document.hidden && Date.now() - gh.polledAt >= every) {
+          refresh()
+        }
+      }, 5000)
+      return
+    }
     if (!SHARED) {
       /** Another tab of this browser changed the notes */
       window.addEventListener('storage', (event) => {
@@ -2235,12 +2817,20 @@
     } catch {
       /** Nothing to reopen */
     }
+    /** A link from the pull request names the note to open: …#ainote=<id> */
+    const linked = /[#&]ainote=([\w-]+)/.exec(location.hash)
+    if (pending === null && linked !== null) {
+      pending = linked[1]
+    }
     const waiting = state.notes.find((note) => note.id === pending)
     if (waiting !== undefined) {
       /** The app is still starting after the page change, so wait longer for it */
       reveal(waiting, 10_000)
     }
   })
+  if (GITHUB && ghToken() !== '') {
+    gh.login = storage(GH_LOGIN)
+  }
   try {
     floatAt = JSON.parse(storage(FLOAT) || 'null')
   } catch {

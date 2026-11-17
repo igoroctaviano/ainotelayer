@@ -2,9 +2,10 @@ name: ainotelayer
 description: >
   Adds an in-app notes layer to a built web app before it is deployed as a
   preview. Reviewers right-click the running preview to pin notes to the UI.
-  With a database-url, notes and replies are shared through a Firebase Realtime
-  Database that people and agents read and write over plain HTTP. Without one,
-  notes stay in each reviewer's browser and travel as a downloaded file.
+  In a pull-request workflow the notes are comments on that pull request: no
+  database, readable without sign-in on a public repository, and agents answer
+  with gh. Otherwise they stay in each reviewer's browser, or go to a Firebase
+  Realtime Database when database-url is set.
 
 inputs:
   dir:
@@ -15,6 +16,11 @@ inputs:
       Firebase Realtime Database URL, for example https://<project>-default-rtdb.firebaseio.com.
       Leave empty to keep notes in each reviewer's browser.
     default: ''
+  store:
+    description: >
+      Where notes are kept. `auto` uses the pull request when the workflow runs
+      for one, else the browser. `github` and `browser` force either.
+    default: auto
   app:
     description: App name shown with the notes
     default: ${{ github.event.repository.name }}
@@ -52,10 +58,20 @@ runs:
         REVIEW_SALT: ${{ inputs.salt }}
         REVIEW_BASE: ${{ inputs.base }}
         REVIEW_REPO: ${{ github.repository }}
+        REVIEW_PR: ${{ github.event.pull_request.number }}
+        REVIEW_STORE: ${{ inputs.store }}
         REVIEW_BRANCH: ${{ github.head_ref || github.ref_name }}
         REVIEW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: |
+        store=()
+        if [ "$REVIEW_STORE" != "browser" ] && [ -n "$REVIEW_PR" ]; then
+          store=(--github "$REVIEW_REPO" --pr "$REVIEW_PR")
+        elif [ "$REVIEW_STORE" = "github" ]; then
+          echo "::error::store is github, but this workflow run has no pull request"
+          exit 1
+        fi
         node "$GITHUB_ACTION_PATH/inject.mjs" \
+          "${store[@]}" \
           --dir "$REVIEW_DIR" \
           --db "$REVIEW_DB" \
           --app "$REVIEW_APP" \

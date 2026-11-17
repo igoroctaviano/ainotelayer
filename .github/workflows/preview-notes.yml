@@ -1,0 +1,28 @@
+# Keeps the notes overview and the ainotelayer/notes status of a pull request
+# up to date. This repository uses its own action; other repositories use
+#   uses: igoroctaviano/ainotelayer/summary@main
+# and do not need the checkout step.
+name: preview-notes
+
+on:
+  pull_request:
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: preview-notes-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  overview:
+    # Comments on plain issues are not about a preview.
+    if: github.event_name == 'pull_request' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./summary

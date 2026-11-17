@@ -17,6 +17,11 @@ inputs:
       Status while notes are unresolved: pending (default), failure, or success
       to never hold a merge back.
     default: pending
+  status:
+    description: >
+      Set to false to only keep the overview comment and set no commit status.
+      The workflow then does not need `statuses: write`.
+    default: 'true'
   trust:
     description: >
       Whose notes and status changes count toward the status: collaborators
@@ -45,12 +50,18 @@ runs:
         NOTES_PREVIEW: ${{ inputs.preview-url }}
         NOTES_UNRESOLVED: ${{ inputs.unresolved }}
         NOTES_TRUST: ${{ inputs.trust }}
+        NOTES_STATUS: ${{ inputs.status }}
       run: |
         if [ -z "$NOTES_PR" ]; then
           echo "ainotelayer: this run is not for a pull request; nothing to do"
           exit 0
         fi
+        extra=()
+        if [ "$NOTES_STATUS" = "false" ]; then
+          extra=(--no-status)
+        fi
         node "$GITHUB_ACTION_PATH/../summary.mjs" \
+          "${extra[@]}" \
           --pr "$NOTES_PR" \
           --preview-url "$NOTES_PREVIEW" \
           --unresolved "$NOTES_UNRESOLVED" \

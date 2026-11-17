@@ -1,0 +1,43 @@
+name: ainotelayer pull request lookup
+description: >
+  For workflows that are started by hand with a pull request number: finds the
+  commit to check out and the branch name, and refuses pull requests from
+  forks, whose code would otherwise run next to the repository's secrets.
+
+inputs:
+  pr:
+    description: Pull request number
+    required: true
+  allow-forks:
+    description: Set to true to build pull requests from forks too. Only when no secret is in reach of the build.
+    default: 'false'
+  github-token:
+    description: Token that can read the pull request
+    default: ${{ github.token }}
+
+outputs:
+  sha:
+    description: The pull request's head commit, for actions/checkout's `ref`
+    value: ${{ steps.info.outputs.sha }}
+  ref:
+    description: The pull request's branch name
+    value: ${{ steps.info.outputs.ref }}
+  body:
+    description: The pull request's description
+    value: ${{ steps.info.outputs.body }}
+
+runs:
+  using: composite
+  steps:
+    - id: info
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        LOOKUP_PR: ${{ inputs.pr }}
+        LOOKUP_FORKS: ${{ inputs.allow-forks }}
+      run: |
+        forks=()
+        if [ "$LOOKUP_FORKS" = "true" ]; then
+          forks=(--allow-forks)
+        fi
+        node "$GITHUB_ACTION_PATH/../pr-info.mjs" --pr "$LOOKUP_PR" "${forks[@]}"

@@ -14,6 +14,8 @@
  *   --preview-url <url>   link to the deployed preview; remembered between runs
  *   --unresolved <state>  status while notes are unresolved: pending (default),
  *                         failure, or success to never hold a merge back
+ *   --no-status           only keep the overview comment; set no commit status
+ *                         (the workflow then needs no `statuses: write`)
  *   --trust <who>         whose notes and status changes count: collaborators
  *                         (default; a note's author may always change their own
  *                         note) or everyone
@@ -25,9 +27,9 @@
  *                         own machine
  *   --dry-run             print what would be written, write nothing
  */
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 
+import { createGithub } from './github-api.mjs'
 import { countNotes, describeCounts, findOverview, foldNotes, readHidden, summaryBody } from './github-notes.mjs'
 
 const CONTEXT = 'ainotelayer/notes'
@@ -39,12 +41,13 @@ function arg(name, fallback = '') {
 
 const repo = arg('repo', process.env.GITHUB_REPOSITORY ?? '')
 const pull = arg('pr')
-const api = (arg('api') || process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '')
+const api = arg('api')
 const token = process.env.GITHUB_TOKEN ?? ''
 const dryRun = process.argv.includes('--dry-run')
 const useGh = process.argv.includes('--gh')
 const whenUnresolved = arg('unresolved', 'pending')
 const trust = arg('trust', 'collaborators')
+const setStatus = !process.argv.includes('--no-status')
 
 if (repo === '' || pull === '') {
   console.error('ainotelayer: --repo and --pr are needed (this run may not be for a pull request)')
@@ -59,50 +62,7 @@ if (!['collaborators', 'everyone'].includes(trust)) {
   process.exit(1)
 }
 
-/** The same request through the gh command, which keeps its own sign-in */
-function viaGh(pathname, options) {
-  const args = ['api', '--method', options.method ?? 'GET', pathname.replace(/^\//, '')]
-  if (options.body !== undefined) {
-    args.push('--input', '-')
-  }
-  try {
-    const out = execFileSync('gh', args, {
-      encoding: 'utf8',
-      input: options.body === undefined ? undefined : JSON.stringify(options.body),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    return out.trim() === '' ? null : JSON.parse(out)
-  } catch (failure) {
-    const text = `${failure.stderr ?? ''}${failure.stdout ?? ''}`.trim()
-    const error = new Error(`${options.method ?? 'GET'} ${pathname}: ${text}`)
-    error.status = Number(/HTTP (\d{3})/.exec(text)?.[1] ?? 0)
-    throw error
-  }
-}
-
-async function github(pathname, options = {}) {
-  if (useGh) {
-    return viaGh(pathname, options)
-  }
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'ainotelayer' }
-  if (token !== '') {
-    headers.Authorization = `Bearer ${token}`
-  }
-  if (options.body !== undefined) {
-    headers['Content-Type'] = 'application/json'
-  }
-  const response = await fetch(`${api}${pathname}`, {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  })
-  if (!response.ok) {
-    const error = new Error(`${options.method ?? 'GET'} ${pathname}: ${response.status} ${await response.text()}`)
-    error.status = response.status
-    throw error
-  }
-  return response.status === 204 ? null : response.json()
-}
+const github = createGithub({ api, token, gh: useGh })
 
 async function allComments() {
   const comments = []
@@ -165,22 +125,28 @@ try {
 }
 
 /** The status is set whether or not the overview could be written */
-try {
+async function writeStatus() {
   const sha = arg('sha') || (await github(`/repos/${repo}/pulls/${pull}`)).head.sha
   /** Statuses pile up on a commit, so only add one when it says something new */
   const history = await github(`/repos/${repo}/commits/${sha}/statuses?per_page=100`)
   const latest = history.find((item) => item.context === CONTEXT)
   if (latest !== undefined && latest.state === status.state && latest.description === status.description) {
     console.log(`ainotelayer: status unchanged (${status.state}: ${status.description})`)
-  } else {
-    await github(`/repos/${repo}/statuses/${sha}`, {
-      method: 'POST',
-      body: { ...status, target_url: overview?.html_url },
-    })
-    console.log(`ainotelayer: status ${status.state}: ${status.description}`)
+    return
   }
-} catch (error) {
-  cannotWrite(error, 'set the notes status')
+  await github(`/repos/${repo}/statuses/${sha}`, {
+    method: 'POST',
+    body: { ...status, target_url: overview?.html_url },
+  })
+  console.log(`ainotelayer: status ${status.state}: ${status.description}`)
+}
+
+if (setStatus) {
+  try {
+    await writeStatus()
+  } catch (error) {
+    cannotWrite(error, 'set the notes status')
+  }
 }
 
 if (process.env.GITHUB_OUTPUT) {

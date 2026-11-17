@@ -1,0 +1,98 @@
+{
+  "about": "Comments of an imaginary pull request, as GitHub's API returns them, and the notes they must fold into. Both readers are checked against it: github-notes.mjs (test/summary.test.mjs) and overlay.js (test/github.html).",
+  "comments": [
+    {
+      "id": 101,
+      "user": { "login": "deploy-bot" },
+      "created_at": "2026-11-17T10:00:00Z",
+      "updated_at": "2026-11-17T10:00:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+      "body": "Visit the preview URL for this PR: https://preview.example"
+    },
+    {
+      "id": 102,
+      "user": { "login": "igor" },
+      "created_at": "2026-11-17T10:01:00Z",
+      "updated_at": "2026-11-17T10:01:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-102",
+      "body": "**Note N1** · Change · button “Go to” · `ViewerToolbar.tsx:99`\n\n> Go to lands too far out\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"Go to lands too far out\",\"kind\":\"Bug\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"anchor\":{\"tag\":\"button\",\"label\":\"Go to\",\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button[aria-label=\\\"Go to\\\"]\",\"offset\":{\"x\":0.5,\"y\":0.5},\"source\":[{\"kind\":\"element\",\"file\":\"src/ViewerToolbar.tsx\",\"line\":99,\"column\":5}]}} -->"
+    },
+    {
+      "id": 103,
+      "user": { "login": "andrey" },
+      "created_at": "2026-11-17T10:02:00Z",
+      "updated_at": "2026-11-17T10:02:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-103",
+      "body": "**Note N2** · Question · switch “ICC profiles”\n\n> Disable while tiles load?\n\n<!-- ainotelayer:note {\"id\":\"bbbb2222\",\"text\":\"Disable while tiles load?\",\"kind\":\"Question\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"anchor\":{\"tag\":\"button\",\"role\":\"switch\",\"label\":\"ICC profiles\",\"xpath\":\"//*[@id=\\\"panel\\\"]/button\",\"selector\":\"#panel > button\",\"offset\":{\"x\":0.5,\"y\":0.5}}} -->"
+    },
+    {
+      "id": 104,
+      "user": { "login": "andrey" },
+      "created_at": "2026-11-17T10:03:00Z",
+      "updated_at": "2026-11-17T10:03:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-104",
+      "body": "N1: I see it too; does master do the same?"
+    },
+    {
+      "id": 105,
+      "user": { "login": "igor" },
+      "created_at": "2026-11-17T10:04:00Z",
+      "updated_at": "2026-11-17T10:04:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-105",
+      "body": "N1: [agent] Igor/Claude: yes, master too. Fixed in abc1234. [fix in place]"
+    },
+    {
+      "id": 106,
+      "user": { "login": "andrey" },
+      "created_at": "2026-11-17T10:05:00Z",
+      "updated_at": "2026-11-17T10:05:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-106",
+      "body": "This is an ordinary review comment about the code, not a note."
+    },
+    {
+      "id": 107,
+      "user": { "login": "igor" },
+      "created_at": "2026-11-17T10:06:00Z",
+      "updated_at": "2026-11-17T10:06:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-107",
+      "body": "N2: Agreed, done.\n\n<!-- ainotelayer:event {\"note\":\"bbbb2222\",\"status\":\"resolved\"} -->"
+    },
+    {
+      "id": 108,
+      "user": { "login": "andrey" },
+      "created_at": "2026-11-17T10:07:00Z",
+      "updated_at": "2026-11-17T10:07:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-108",
+      "body": "**Note N3** · Change · canvas\n\n> Blocky tiles while zooming\n\n<!-- ainotelayer:note {\"id\":\"cccc3333\",\"text\":\"Blocky tiles while zooming\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"anchor\":{\"tag\":\"canvas\",\"xpath\":\"//*[@id=\\\"root\\\"]/canvas\",\"selector\":\"canvas\",\"offset\":{\"x\":0.4,\"y\":0.6}}} -->"
+    },
+    {
+      "id": 109,
+      "user": { "login": "andrey" },
+      "created_at": "2026-11-17T10:08:00Z",
+      "updated_at": "2026-11-17T10:08:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-109",
+      "body": "N9: there is no note 9, so this goes nowhere"
+    },
+    {
+      "id": 110,
+      "user": { "login": "igor" },
+      "created_at": "2026-11-17T10:09:00Z",
+      "updated_at": "2026-11-17T10:09:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-110",
+      "body": "N1 - [open]"
+    },
+    {
+      "id": 111,
+      "user": { "login": "github-actions[bot]" },
+      "created_at": "2026-11-17T10:10:00Z",
+      "updated_at": "2026-11-17T10:10:00Z",
+      "html_url": "https://github.com/o/r/pull/7#issuecomment-111",
+      "body": "### Preview notes: 2 of 3 unresolved\n\n| Note | On | Status | Replies | Last activity |\n|---|---|---|---|---|\n| [N1](x) Go to lands too far out | button | **Open** | 3 | @igor, 2026-11-17 |\n\n<!-- ainotelayer:summary {\"preview\":\"https://preview.example\"} -->"
+    }
+  ],
+  "expect": [
+    { "n": 1, "id": "aaaa1111", "status": "open", "replies": 3, "author": "igor" },
+    { "n": 2, "id": "bbbb2222", "status": "resolved", "replies": 1, "author": "andrey" },
+    { "n": 3, "id": "cccc3333", "status": "open", "replies": 0, "author": "andrey" }
+  ]
+}

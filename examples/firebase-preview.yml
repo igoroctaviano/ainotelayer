@@ -19,6 +19,7 @@ permissions:
   contents: read
   checks: write
   pull-requests: write
+  statuses: write
 
 jobs:
   preview:
@@ -52,31 +53,8 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           channelId: pr-${{ github.event.pull_request.number }}
 
-      # One comment per PR with the links to hand to people and to agents.
-      - uses: actions/github-script@v7
-        env:
-          PREVIEW_URL: ${{ steps.deploy.outputs.details_url }}
-          NOTES_URL: ${{ steps.review.outputs.notes-url }}
-          AGENT_PATH: ${{ steps.review.outputs.agent-path }}
+      # One comment on the pull request with the notes overview and the links to
+      # hand to people and agents, plus the ainotelayer/notes status.
+      - uses: igoroctaviano/ainotelayer/summary@main
         with:
-          script: |
-            const marker = '<!-- ainotelayer -->'
-            const preview = process.env.PREVIEW_URL.replace(/\/$/, '')
-            const body = [
-              marker,
-              `**Preview with notes:** ${preview}`,
-              'Right-click anything in the preview to pin a note to it.',
-              '',
-              `**For an agent:** ${preview}${process.env.AGENT_PATH}`,
-              `**All notes (JSON):** ${process.env.NOTES_URL}`,
-            ].join('\n')
-            const { data: comments } = await github.rest.issues.listComments({
-              ...context.repo,
-              issue_number: context.issue.number,
-            })
-            const mine = comments.find((comment) => comment.body.includes(marker))
-            if (mine) {
-              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body })
-            } else {
-              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body })
-            }
+          preview-url: ${{ steps.deploy.outputs.details_url }}

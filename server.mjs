@@ -384,11 +384,61 @@ async function mockApi(request, response, url) {
       return
     }
   }
+  const pull = /^\/repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/.exec(route)
+  if (pull !== null && request.method === 'GET') {
+    json(response, 200, { number: Number(pull[3]), head: { sha: `mocksha${pull[3]}` } })
+    return
+  }
+  const statuses =
+    /^\/repos\/([^/]+)\/([^/]+)\/statuses\/([\w]+)$/.exec(route) ??
+    /^\/repos\/([^/]+)\/([^/]+)\/commits\/([\w]+)\/statuses$/.exec(route)
+  if (statuses !== null) {
+    const file = path.join(storeDir, `mock-github__${slug(statuses[1])}__${slug(statuses[2])}__statuses.json`)
+    const stored = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
+    if (request.method === 'GET') {
+      json(response, 200, stored[statuses[3]] ?? [])
+      return
+    }
+    if (request.method === 'POST') {
+      if (login === null) {
+        json(response, 401, { message: 'Requires authentication' })
+        return
+      }
+      const input = await readJson(request)
+      stored[statuses[3]] = [{ ...input, creator: { login }, created_at: new Date().toISOString() }, ...(stored[statuses[3]] ?? [])]
+      fs.mkdirSync(storeDir, { recursive: true })
+      fs.writeFileSync(file, `${JSON.stringify(stored, null, 2)}\n`)
+      json(response, 201, stored[statuses[3]][0])
+      return
+    }
+  }
   const one = /^\/repos\/([^/]+)\/([^/]+)\/issues\/comments\/(\d+)$/.exec(route)
+  if (one !== null && request.method === 'PATCH') {
+    const prefix = `mock-github__${slug(one[1])}__${slug(one[2])}__`
+    const files = fs.existsSync(storeDir) ? fs.readdirSync(storeDir).filter((name) => name.startsWith(prefix) && !name.endsWith('statuses.json')) : []
+    for (const name of files) {
+      const file = path.join(storeDir, name)
+      const store = mockLoad(file)
+      const comment = store.comments.find((item) => item.id === Number(one[3]))
+      if (comment === undefined) {
+        continue
+      }
+      if (login !== comment.user.login) {
+        json(response, 403, { message: 'Only the author can edit this comment.' })
+        return
+      }
+      const input = await readJson(request)
+      comment.body = String(input?.body ?? '')
+      comment.updated_at = new Date().toISOString()
+      fs.writeFileSync(file, `${JSON.stringify(store, null, 2)}\n`)
+      json(response, 200, comment)
+      return
+    }
+  }
   if (one !== null && request.method === 'DELETE') {
     /** The simulated store is searched across pull requests, as GitHub's comment ids are global */
     const prefix = `mock-github__${slug(one[1])}__${slug(one[2])}__`
-    const files = fs.existsSync(storeDir) ? fs.readdirSync(storeDir).filter((name) => name.startsWith(prefix)) : []
+    const files = fs.existsSync(storeDir) ? fs.readdirSync(storeDir).filter((name) => name.startsWith(prefix) && !name.endsWith('statuses.json')) : []
     for (const name of files) {
       const file = path.join(storeDir, name)
       const store = mockLoad(file)

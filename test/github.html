@@ -147,10 +147,32 @@
         check('an imported note names the original author', out.notes.aaaa1111.messages.first.author === 'AF (via @igor)', out.notes.aaaa1111.messages.first.author)
       }
 
-      const passed = results.filter(Boolean).length
-      const summary = `${passed === results.length ? 'PASS' : 'FAIL'} ${passed}/${results.length}`
-      document.title = summary
-      document.getElementById('out').textContent = `${summary}\n\n${lines.join('\n')}`
+      /**
+       * 9. the shared fixture: the same comments the CI reader (github-notes.mjs)
+       * is checked against in test/summary.test.mjs
+       */
+      fetch('./fixtures/pr-comments.json')
+        .then((response) => response.json())
+        .then((fixture) => {
+          const out = fold(fixture.comments)
+          const got = Object.values(out.notes)
+            .sort((a, b) => a.n - b.n)
+            .map((item) => ({
+              n: item.n,
+              id: item.id,
+              status: item.status,
+              replies: Object.keys(item.messages).length - 1,
+              author: item.messages.first.author.replace(/^@/, ''),
+            }))
+          check('the shared fixture folds the same way as in CI', JSON.stringify(got) === JSON.stringify(fixture.expect), JSON.stringify(got))
+        })
+        .catch((error) => check('the shared fixture could be loaded', false, error.message))
+        .finally(() => {
+          const passed = results.filter(Boolean).length
+          const summary = `${passed === results.length ? 'PASS' : 'FAIL'} ${passed}/${results.length}`
+          document.title = summary
+          document.getElementById('out').textContent = `${summary}\n\n${lines.join('\n')}`
+        })
     </script>
   </body>
 </html>

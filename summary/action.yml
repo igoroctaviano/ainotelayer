@@ -1,0 +1,50 @@
+name: ainotelayer notes overview
+description: >
+  Keeps one overview comment of a pull request's ainotelayer notes up to date
+  and sets a commit status (ainotelayer/notes) that can be required before
+  merging. Run it after the preview is deployed, and again when comments
+  change (on: issue_comment).
+
+inputs:
+  pr:
+    description: Pull request number
+    default: ${{ github.event.pull_request.number || github.event.issue.number }}
+  preview-url:
+    description: Link to the deployed preview. Remembered between runs that do not know it.
+    default: ''
+  unresolved:
+    description: >
+      Status while notes are unresolved: pending (default), failure, or success
+      to never hold a merge back.
+    default: pending
+  github-token:
+    description: Token that can comment on the pull request and set commit statuses
+    default: ${{ github.token }}
+
+outputs:
+  total:
+    description: Number of notes on the pull request
+    value: ${{ steps.summary.outputs.total }}
+  unresolved:
+    description: Number of notes that are open or have a fix in place
+    value: ${{ steps.summary.outputs.unresolved }}
+
+runs:
+  using: composite
+  steps:
+    - id: summary
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        NOTES_PR: ${{ inputs.pr }}
+        NOTES_PREVIEW: ${{ inputs.preview-url }}
+        NOTES_UNRESOLVED: ${{ inputs.unresolved }}
+      run: |
+        if [ -z "$NOTES_PR" ]; then
+          echo "ainotelayer: this run is not for a pull request; nothing to do"
+          exit 0
+        fi
+        node "$GITHUB_ACTION_PATH/../summary.mjs" \
+          --pr "$NOTES_PR" \
+          --preview-url "$NOTES_PREVIEW" \
+          --unresolved "$NOTES_UNRESOLVED"

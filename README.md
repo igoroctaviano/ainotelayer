@@ -96,6 +96,25 @@ N3: fixed in abc1234 [fix in place]
   and expired preview links.
 - Nothing needs to be enabled on the repository and there is no database.
 
+### Overview and merge status
+
+```yaml
+- uses: igoroctaviano/ainotelayer/summary@main
+  with:
+    preview-url: ${{ steps.deploy.outputs.details_url }}
+```
+
+keeps one overview comment on the pull request up to date ("2 of 5
+unresolved", each note with its status and a link) and sets a commit status,
+`ainotelayer/notes`: pending while notes are open or have a fix in place,
+success once all are resolved. Require that status in the branch protection
+rules to hold merges back until the notes are dealt with.
+
+Run it after the deploy, and from a second workflow on `issue_comment` so the
+status follows the conversation:
+[examples/preview-notes.yml](examples/preview-notes.yml). The workflow needs
+`pull-requests: write` and `statuses: write`.
+
 ### In a database
 
 For the shared database, deploy [database.rules.json](database.rules.json) to a
@@ -192,6 +211,8 @@ Not tried yet:
 
 - A real Firebase project.
 - Writing to a real pull request from the preview with a pasted token.
+- The comment-triggered refresh of the overview (it only runs once the
+  workflow is on the default branch).
 - The GitHub Action in a workflow.
 - The webpack/Rspack loader inside a real build.
 - Production builds with source stamping on.

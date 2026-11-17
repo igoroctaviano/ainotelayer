@@ -22,14 +22,18 @@ inputs:
       triggered by a pull request, for example a manually run one.
     default: ${{ github.event.pull_request.number }}
   branch:
-    description: Branch the build was made from, recorded with the notes
-    default: ${{ github.head_ref || github.ref_name }}
+    description: >
+      Branch the build was made from, recorded with the notes. Worked out from
+      the pull request when left empty.
+    default: ''
   sha:
     description: >
-      Commit the build was made from. Notes link to source files at this
-      commit, so set it when the workflow builds something other than the
-      commit it runs on.
-    default: ${{ github.event.pull_request.head.sha || github.sha }}
+      Commit the build was made from; notes link to source files at this
+      commit. Worked out from the pull request when left empty.
+    default: ''
+  github-token:
+    description: Token that can read the pull request, to work out its branch and commit
+    default: ${{ github.token }}
   store:
     description: >
       Where notes are kept. `auto` uses the pull request when there is one
@@ -75,9 +79,22 @@ runs:
         REVIEW_REPO: ${{ github.repository }}
         REVIEW_PR: ${{ inputs.pr }}
         REVIEW_STORE: ${{ inputs.store }}
-        REVIEW_BRANCH: ${{ inputs.branch }}
-        REVIEW_SHA: ${{ inputs.sha }}
+        REVIEW_BRANCH: ${{ inputs.branch || github.head_ref }}
+        REVIEW_SHA: ${{ inputs.sha || github.event.pull_request.head.sha }}
+        REVIEW_REF_NAME: ${{ github.ref_name }}
+        REVIEW_RUN_SHA: ${{ github.sha }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
+        # A run that was not started by the pull request (a manual one) only
+        # knows its number: ask GitHub which branch and commit it is.
+        if [ -n "$REVIEW_PR" ] && { [ -z "$REVIEW_BRANCH" ] || [ -z "$REVIEW_SHA" ]; }; then
+          # Its outputs are not this step's, and a failed lookup must not fail the build.
+          info="$(GITHUB_OUTPUT= node "$GITHUB_ACTION_PATH/pr-info.mjs" --pr "$REVIEW_PR" --allow-forks || true)"
+          REVIEW_BRANCH="${REVIEW_BRANCH:-$(printf '%s\n' "$info" | sed -n 's/^ref=//p')}"
+          REVIEW_SHA="${REVIEW_SHA:-$(printf '%s\n' "$info" | sed -n 's/^sha=//p')}"
+        fi
+        REVIEW_BRANCH="${REVIEW_BRANCH:-$REVIEW_REF_NAME}"
+        REVIEW_SHA="${REVIEW_SHA:-$REVIEW_RUN_SHA}"
         store=()
         if [ "$REVIEW_STORE" != "browser" ] && [ -n "$REVIEW_PR" ]; then
           store=(--github "$REVIEW_REPO" --pr "$REVIEW_PR")

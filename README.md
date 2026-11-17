@@ -120,7 +120,8 @@ rules to hold merges back until the notes are dealt with.
 Run it after the deploy, and from a second workflow on `issue_comment` so the
 status follows the conversation:
 [examples/preview-notes.yml](examples/preview-notes.yml). The workflow needs
-`pull-requests: write` and `statuses: write`.
+`pull-requests: write` and `statuses: write`. With `status: false` it only
+keeps the overview comment and needs no `statuses: write`.
 
 Notes from people without write access to the repository are shown in the
 preview and listed apart in the overview, but they do not count toward the
@@ -181,22 +182,53 @@ It needs Node 22.18 or newer when the app's Vite config is TypeScript.
 
 ## Only when asked: a manually run preview
 
-To keep ordinary previews as they are, put the layer in a workflow that runs
-`on: workflow_dispatch` with the pull request number as an input: check out
-that pull request, build, then
+To keep ordinary previews as they are, add a manual trigger with the pull
+request number as an input, and run the notes steps only then:
 
 ```yaml
-- uses: igoroctaviano/ainotelayer@main
-  with:
-    dir: build
-    pr: ${{ inputs.pr }}
-    sha: <the pull request's head commit>
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request to build a preview with notes for
+        required: true
+        type: number
+
+# ...
+steps:
+  # Finds the commit to check out; refuses pull requests from forks.
+  - id: pr
+    uses: igoroctaviano/ainotelayer/pull-request@main
+    with:
+      pr: ${{ inputs.pr }}
+  - uses: actions/checkout@v4
+    with:
+      ref: ${{ steps.pr.outputs.sha }}
+
+  # ... your own setup and install ...
+
+  - id: stamp
+    uses: igoroctaviano/ainotelayer/stamp@main
+  - run: npm run build -- ${{ steps.stamp.outputs.args }}
+
+  - uses: igoroctaviano/ainotelayer@main
+    with:
+      dir: build
+      pr: ${{ inputs.pr }}
+
+  # ... deploy `build` to a channel of its own ...
+
+  - uses: igoroctaviano/ainotelayer/summary@main
+    with:
+      pr: ${{ inputs.pr }}
+      preview-url: <the deployed URL>
 ```
 
-deploy to a channel of its own, and run `ainotelayer/summary` with the same
-`pr`. Notes belong to the pull request, so running it again after new pushes
-gives a fresh preview with the same notes. GitHub only offers manually run
-workflows that exist on the default branch.
+These can also be steps in an existing preview workflow, guarded with
+`if: github.event_name == 'workflow_dispatch'`, so the build is not copied.
+Notes belong to the pull request, so running it again after new pushes gives
+a fresh preview with the same notes. GitHub only offers manually run workflows
+that exist on the default branch.
 
 ## Handing notes to an agent
 

@@ -16,10 +16,25 @@ inputs:
       Firebase Realtime Database URL, for example https://<project>-default-rtdb.firebaseio.com.
       Leave empty to keep notes in each reviewer's browser.
     default: ''
+  pr:
+    description: >
+      Pull request the notes are kept on. Set it when the workflow is not
+      triggered by a pull request, for example a manually run one.
+    default: ${{ github.event.pull_request.number }}
+  branch:
+    description: Branch the build was made from, recorded with the notes
+    default: ${{ github.head_ref || github.ref_name }}
+  sha:
+    description: >
+      Commit the build was made from. Notes link to source files at this
+      commit, so set it when the workflow builds something other than the
+      commit it runs on.
+    default: ${{ github.event.pull_request.head.sha || github.sha }}
   store:
     description: >
-      Where notes are kept. `auto` uses the pull request when the workflow runs
-      for one, else the browser. `github` and `browser` force either.
+      Where notes are kept. `auto` uses the pull request when there is one
+      (the workflow runs for it, or `pr` is set), else the browser. `github`
+      and `browser` force either.
     default: auto
   app:
     description: App name shown with the notes
@@ -58,10 +73,10 @@ runs:
         REVIEW_SALT: ${{ inputs.salt }}
         REVIEW_BASE: ${{ inputs.base }}
         REVIEW_REPO: ${{ github.repository }}
-        REVIEW_PR: ${{ github.event.pull_request.number }}
+        REVIEW_PR: ${{ inputs.pr }}
         REVIEW_STORE: ${{ inputs.store }}
-        REVIEW_BRANCH: ${{ github.head_ref || github.ref_name }}
-        REVIEW_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        REVIEW_BRANCH: ${{ inputs.branch }}
+        REVIEW_SHA: ${{ inputs.sha }}
       run: |
         store=()
         if [ "$REVIEW_STORE" != "browser" ] && [ -n "$REVIEW_PR" ]; then

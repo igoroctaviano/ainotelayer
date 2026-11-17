@@ -1,0 +1,46 @@
+name: ainotelayer source stamping
+description: >
+  Prepares a Vite build to tag JSX with source locations, so notes can say
+  which file and line an element comes from, without changing anything in the
+  app's repository. Run it before the build and add its `args` output to the
+  build command. For apps that are not built with Vite it does nothing.
+
+inputs:
+  root:
+    description: Folder of the app (where its vite.config.* is)
+    default: .
+  config:
+    description: The app's Vite config, when it is not vite.config.* in the root
+    default: ''
+
+outputs:
+  config:
+    description: >
+      Path of the Vite config to build with: add
+      `--config <this> --configLoader native` to the app's build command.
+      Empty when there is nothing to do.
+    value: ${{ steps.wrap.outputs.config }}
+  args:
+    description: The same as one string, `--config <path> --configLoader native`, for commands that take it unquoted
+    value: ${{ steps.wrap.outputs.args }}
+
+runs:
+  using: composite
+  steps:
+    - id: wrap
+      shell: bash
+      env:
+        STAMP_ROOT: ${{ inputs.root }}
+        STAMP_CONFIG: ${{ inputs.config }}
+      run: |
+        # The plugin's two dependencies, installed next to the action itself.
+        npm ci --omit=dev --no-audit --no-fund --prefix "$GITHUB_ACTION_PATH/.." > /dev/null
+        extra=()
+        if [ -n "$STAMP_CONFIG" ]; then
+          extra=(--config "$STAMP_CONFIG")
+        fi
+        args="$(node "$GITHUB_ACTION_PATH/../vite-wrap.mjs" --root "$STAMP_ROOT" --out "$RUNNER_TEMP/ainotelayer.vite.config.mjs" "${extra[@]}")"
+        echo "args=$args" >> "$GITHUB_OUTPUT"
+        if [ -n "$args" ]; then
+          echo "config=$RUNNER_TEMP/ainotelayer.vite.config.mjs" >> "$GITHUB_OUTPUT"
+        fi

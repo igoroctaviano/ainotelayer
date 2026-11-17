@@ -5,7 +5,9 @@
  * pass over every source file in real apps and report what it could not read.
  */
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
@@ -82,6 +84,32 @@ test('node_modules and non-script files are not considered', () => {
   assert.equal(isStampable('/repo/node_modules/x/index.jsx'), false)
   assert.equal(isStampable('/repo/src/a.ts'), false)
   assert.equal(isStampable('/repo/src/a.tsx'), true)
+})
+
+test('vite-wrap writes a config that puts the plugin in front of the app\'s own', () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anl-wrap-'))
+  const script = path.join(import.meta.dirname, '..', 'vite-wrap.mjs')
+  fs.writeFileSync(path.join(folder, 'vite.config.mjs'), 'export default { plugins: [{ name: \'app-plugin\' }], base: \'/x/\' }\n')
+  const out = path.join(folder, 'out', 'wrapped.mjs')
+  const printed = execFileSync('node', [script, '--root', folder, '--out', out], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  assert.equal(printed.trim(), `--config ${out} --configLoader native`)
+  return import(out).then(async (wrapped) => {
+    const config = await wrapped.default({ mode: 'production', command: 'build' })
+    assert.equal(config.base, '/x/')
+    assert.deepEqual(config.plugins.map((plugin) => plugin.name), ['ainotelayer:stamp', 'app-plugin'])
+    /** The wrapped plugin is on without the AINOTELAYER variable */
+    const result = config.plugins[0].transform('export const A = () => <div />', path.join(folder, 'A.jsx'))
+    assert.match(result.code, /data-anl-src=/)
+  })
+})
+
+test('vite-wrap does nothing for an app without a Vite config', () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'anl-wrap-'))
+  const script = path.join(import.meta.dirname, '..', 'vite-wrap.mjs')
+  const out = path.join(folder, 'wrapped.mjs')
+  const printed = execFileSync('node', [script, '--root', folder, '--out', out], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+  assert.equal(printed, '')
+  assert.equal(fs.existsSync(out), false)
 })
 
 function sourceFiles(folder) {

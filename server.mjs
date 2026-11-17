@@ -10,6 +10,14 @@
  *
  * Usage:
  *   node server.mjs --target http://localhost:3100 --port 3200 --repo ../slim-redesign
+ *
+ * Options:
+ *   --pr <number>      keep notes as comments on that pull request instead of in
+ *                      local files (the repository is read from the git remote,
+ *                      or given with --github owner/name)
+ *   --mock-github      with --pr: talk to a simulated GitHub served by this
+ *                      server, for trying things out without touching GitHub.
+ *                      Its tokens are `mock-<login>`.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -17,7 +25,7 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 
-import { agentGuide, slug } from './agent-guide.mjs'
+import { agentGuide, overlayBundle, slug } from './agent-guide.mjs'
 
 const here = import.meta.dirname
 
@@ -32,6 +40,9 @@ const repo = path.resolve(arg('repo', process.cwd()))
 const storeDir = path.resolve(arg('store', path.join(here, 'notes')))
 const PREFIX = '/__ainotelayer'
 const DB = `${PREFIX}/db`
+const MOCK = `${PREFIX}/mock-github`
+const pullRequest = arg('pr', '')
+const mockGithub = process.argv.includes('--mock-github')
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, PUT, PATCH, POST, DELETE, OPTIONS',
@@ -284,8 +295,176 @@ function origin(request) {
   return `http://${request.headers.host ?? `localhost:${port}`}`
 }
 
+function attribute(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+}
+
+/** The repository whose pull request holds the notes, when --pr is given */
+function githubRepo(info) {
+  return arg('github', '') || info.repo || ''
+}
+
 function overlayTag(info) {
-  return `<script src="${PREFIX}/overlay.js" data-db="${DB}" data-review="${info.review}" defer></script>`
+  const meta = ` data-meta="${attribute(JSON.stringify(info))}"`
+  const repository = githubRepo(info)
+  if (pullRequest !== '' && repository !== '') {
+    const api = mockGithub ? ` data-github-api="${MOCK}"` : ''
+    return `<script src="${PREFIX}/overlay.js" data-github="${attribute(repository)}" data-pr="${attribute(pullRequest)}"${api} data-review="${info.review}"${meta} defer></script>`
+  }
+  return `<script src="${PREFIX}/overlay.js" data-db="${DB}" data-review="${info.review}"${meta} defer></script>`
+}
+
+/** --- A simulated GitHub, for trying the pull-request store locally -------- */
+
+function mockFile(owner, name, number) {
+  return path.join(storeDir, `mock-github__${slug(owner)}__${slug(name)}__${slug(number)}.json`)
+}
+
+function mockLoad(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { next: 1000, comments: [] }
+    }
+    throw error
+  }
+}
+
+/** `Bearer mock-<login>` signs in as <login>; anything else is not signed in */
+function mockLogin(request) {
+  const found = /^(?:Bearer|token) mock-([\w-]+)$/.exec(String(request.headers.authorization ?? ''))
+  return found === null ? null : found[1]
+}
+
+async function mockApi(request, response, url) {
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204, CORS)
+    response.end()
+    return
+  }
+  const route = url.pathname.slice(MOCK.length)
+  const login = mockLogin(request)
+  if (login === null && request.headers.authorization !== undefined) {
+    /** Like GitHub: a token it does not know is refused, even for reading */
+    json(response, 401, { message: 'Bad credentials' })
+    return
+  }
+  if (route === '/user') {
+    json(response, login === null ? 401 : 200, login === null ? { message: 'Bad credentials' } : { login })
+    return
+  }
+  const list = /^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/comments$/.exec(route)
+  if (list !== null) {
+    const file = mockFile(list[1], list[2], list[3])
+    const store = mockLoad(file)
+    if (request.method === 'GET') {
+      const since = url.searchParams.get('since') ?? ''
+      const size = Number(url.searchParams.get('per_page') ?? 30)
+      const page = Number(url.searchParams.get('page') ?? 1)
+      const matching = store.comments.filter((comment) => comment.updated_at >= since)
+      json(response, 200, matching.slice((page - 1) * size, page * size))
+      return
+    }
+    if (request.method === 'POST') {
+      if (login === null) {
+        json(response, 401, { message: 'Requires authentication' })
+        return
+      }
+      const input = await readJson(request)
+      const now = new Date().toISOString()
+      const comment = {
+        id: store.next,
+        body: String(input?.body ?? ''),
+        /** Logins starting with "outsider" stand for people without access to the repository */
+        user: { login, type: /bot$/.test(login) ? 'Bot' : 'User' },
+        author_association: login.startsWith('outsider') ? 'NONE' : 'COLLABORATOR',
+        created_at: now,
+        updated_at: now,
+        html_url: `https://github.com/${list[1]}/${list[2]}/pull/${list[3]}#issuecomment-${store.next}`,
+      }
+      store.next += 1
+      store.comments.push(comment)
+      fs.mkdirSync(storeDir, { recursive: true })
+      fs.writeFileSync(file, `${JSON.stringify(store, null, 2)}\n`)
+      json(response, 201, comment)
+      return
+    }
+  }
+  const pull = /^\/repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/.exec(route)
+  if (pull !== null && request.method === 'GET') {
+    json(response, 200, { number: Number(pull[3]), head: { sha: `mocksha${pull[3]}` } })
+    return
+  }
+  const statuses =
+    /^\/repos\/([^/]+)\/([^/]+)\/statuses\/([\w]+)$/.exec(route) ??
+    /^\/repos\/([^/]+)\/([^/]+)\/commits\/([\w]+)\/statuses$/.exec(route)
+  if (statuses !== null) {
+    const file = path.join(storeDir, `mock-github__${slug(statuses[1])}__${slug(statuses[2])}__statuses.json`)
+    const stored = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
+    if (request.method === 'GET') {
+      json(response, 200, stored[statuses[3]] ?? [])
+      return
+    }
+    if (request.method === 'POST') {
+      if (login === null) {
+        json(response, 401, { message: 'Requires authentication' })
+        return
+      }
+      const input = await readJson(request)
+      stored[statuses[3]] = [{ ...input, creator: { login }, created_at: new Date().toISOString() }, ...(stored[statuses[3]] ?? [])]
+      fs.mkdirSync(storeDir, { recursive: true })
+      fs.writeFileSync(file, `${JSON.stringify(stored, null, 2)}\n`)
+      json(response, 201, stored[statuses[3]][0])
+      return
+    }
+  }
+  const one = /^\/repos\/([^/]+)\/([^/]+)\/issues\/comments\/(\d+)$/.exec(route)
+  if (one !== null && request.method === 'PATCH') {
+    const prefix = `mock-github__${slug(one[1])}__${slug(one[2])}__`
+    const files = fs.existsSync(storeDir) ? fs.readdirSync(storeDir).filter((name) => name.startsWith(prefix) && !name.endsWith('statuses.json')) : []
+    for (const name of files) {
+      const file = path.join(storeDir, name)
+      const store = mockLoad(file)
+      const comment = store.comments.find((item) => item.id === Number(one[3]))
+      if (comment === undefined) {
+        continue
+      }
+      if (login !== comment.user.login) {
+        json(response, 403, { message: 'Only the author can edit this comment.' })
+        return
+      }
+      const input = await readJson(request)
+      comment.body = String(input?.body ?? '')
+      comment.updated_at = new Date().toISOString()
+      fs.writeFileSync(file, `${JSON.stringify(store, null, 2)}\n`)
+      json(response, 200, comment)
+      return
+    }
+  }
+  if (one !== null && request.method === 'DELETE') {
+    /** The simulated store is searched across pull requests, as GitHub's comment ids are global */
+    const prefix = `mock-github__${slug(one[1])}__${slug(one[2])}__`
+    const files = fs.existsSync(storeDir) ? fs.readdirSync(storeDir).filter((name) => name.startsWith(prefix) && !name.endsWith('statuses.json')) : []
+    for (const name of files) {
+      const file = path.join(storeDir, name)
+      const store = mockLoad(file)
+      const comment = store.comments.find((item) => item.id === Number(one[3]))
+      if (comment === undefined) {
+        continue
+      }
+      if (login === null || (login !== comment.user.login && login !== 'maintainer')) {
+        json(response, 403, { message: 'Must have admin rights to Repository.' })
+        return
+      }
+      store.comments = store.comments.filter((item) => item !== comment)
+      fs.writeFileSync(file, `${JSON.stringify(store, null, 2)}\n`)
+      response.writeHead(204, CORS)
+      response.end()
+      return
+    }
+  }
+  json(response, 404, { message: 'Not Found' })
 }
 
 /** Keep the stored build info current, so notes record the build they were made on */
@@ -306,12 +485,17 @@ function serveOwn(request, response, url) {
   const info = meta()
   if (url.pathname === `${PREFIX}/overlay.js`) {
     response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' })
-    response.end(fs.readFileSync(path.join(here, 'overlay.js')))
+    response.end(overlayBundle(here))
     return
   }
   if (url.pathname === `${PREFIX}/agent.md`) {
     response.writeHead(200, { ...CORS, 'content-type': 'text/markdown; charset=utf-8' })
-    response.end(agentGuide({ db: `${origin(request)}${DB}`, review: info.review, meta: info }))
+    const repository = githubRepo(info)
+    const github =
+      pullRequest !== '' && repository !== ''
+        ? { repo: repository, pr: pullRequest, api: mockGithub ? `${origin(request)}${MOCK}` : undefined }
+        : undefined
+    response.end(agentGuide({ db: `${origin(request)}${DB}`, review: info.review, meta: info, github }))
     return
   }
   json(response, 404, { error: 'Not found' })
@@ -376,6 +560,16 @@ const server = http.createServer((request, response) => {
     })
     return
   }
+  if (mockGithub && url.pathname.startsWith(`${MOCK}/`)) {
+    mockApi(request, response, url).catch((error) => {
+      if (!response.headersSent) {
+        json(response, 500, { message: error.message })
+      } else {
+        response.end()
+      }
+    })
+    return
+  }
   if (url.pathname.startsWith(`${PREFIX}/`)) {
     serveOwn(request, response, url)
     return
@@ -406,6 +600,11 @@ server.on('upgrade', (request, socket, head) => {
 server.listen(port, 'localhost', () => {
   const info = meta()
   console.log(`ainotelayer: http://localhost:${port} -> ${target.origin}`)
-  console.log(`Notes for ${info.app} @ ${info.branch} (${info.sha}): ${treeFile(info.review)}`)
+  if (pullRequest !== '' && githubRepo(info) !== '') {
+    const where = mockGithub ? 'a simulated GitHub' : 'GitHub'
+    console.log(`Notes for ${info.app}: comments on pull request #${pullRequest} in ${githubRepo(info)} (${where})`)
+  } else {
+    console.log(`Notes for ${info.app} @ ${info.branch} (${info.sha}): ${treeFile(info.review)}`)
+  }
   console.log(`Agent handoff: http://localhost:${port}${PREFIX}/agent.md`)
 })

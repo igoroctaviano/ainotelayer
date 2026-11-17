@@ -1,0 +1,526 @@
+{
+  "about": "Comments of imaginary pull requests, as GitHub's API returns them, and the notes they must fold into. The browser overlay (test/github.html) and the CI reader (test/summary.test.mjs) are both checked against every scenario.",
+  "scenarios": [
+    {
+      "name": "a typical review",
+      "comments": [
+        {
+          "id": 101,
+          "user": {
+            "login": "deploy-bot",
+            "type": "Bot"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:01:00Z",
+          "updated_at": "2026-11-17T10:01:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+          "body": "Visit the preview URL for this PR: https://preview.example"
+        },
+        {
+          "id": 102,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:02:00Z",
+          "updated_at": "2026-11-17T10:02:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-102",
+          "body": "**Note N1** · Bug · button “Go to” · `ViewerToolbar.tsx:99`\n\n> Go to lands too far out\n\n[Open in the preview](https://preview.example/studies/1#ainote=aaaa1111) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"Go to lands too far out\",\"kind\":\"Bug\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\",\"source\":[{\"kind\":\"element\",\"file\":\"src/ViewerToolbar.tsx\",\"line\":99,\"column\":5}]},\"n\":1} -->"
+        },
+        {
+          "id": 103,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:03:00Z",
+          "updated_at": "2026-11-17T10:03:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-103",
+          "body": "**Note N2** · Question · switch “ICC profiles”\n\n> Disable while tiles load?\n\n[Open in the preview](https://preview.example/studies/1#ainote=bbbb2222) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"bbbb2222\",\"text\":\"Disable while tiles load?\",\"kind\":\"Question\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"role\":\"switch\",\"label\":\"ICC profiles\"},\"n\":2} -->"
+        },
+        {
+          "id": 104,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:04:00Z",
+          "updated_at": "2026-11-17T10:04:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-104",
+          "body": "N1: I see it too; does master do the same?"
+        },
+        {
+          "id": 105,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:05:00Z",
+          "updated_at": "2026-11-17T10:05:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-105",
+          "body": "N1: [agent] Igor/Claude: yes, master too. Fixed in abc1234. [fix in place]"
+        },
+        {
+          "id": 106,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:06:00Z",
+          "updated_at": "2026-11-17T10:06:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-106",
+          "body": "This is an ordinary review comment about the code, not a note."
+        },
+        {
+          "id": 107,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:07:00Z",
+          "updated_at": "2026-11-17T10:07:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-107",
+          "body": "N2: Agreed, done. [resolved]\n\n<!-- ainotelayer:event {\"note\":\"bbbb2222\",\"status\":\"resolved\"} -->"
+        },
+        {
+          "id": 108,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:08:00Z",
+          "updated_at": "2026-11-17T10:08:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-108",
+          "body": "**Note N3** · Change · canvas\n\n> Blocky tiles while zooming\n\n[Open in the preview](https://preview.example/studies/1#ainote=cccc3333) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"cccc3333\",\"text\":\"Blocky tiles while zooming\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"canvas\"},\"n\":3} -->"
+        },
+        {
+          "id": 109,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:09:00Z",
+          "updated_at": "2026-11-17T10:09:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-109",
+          "body": "N9: there is no note 9, so this goes nowhere"
+        },
+        {
+          "id": 110,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:10:00Z",
+          "updated_at": "2026-11-17T10:10:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-110",
+          "body": "N1 - [open]"
+        },
+        {
+          "id": 111,
+          "user": {
+            "login": "github-actions[bot]",
+            "type": "Bot"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:11:00Z",
+          "updated_at": "2026-11-17T10:11:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-111",
+          "body": "### Preview notes: 2 of 3 unresolved\n\n| Note | On | Status |\n|---|---|---|\n| [N1](x) Go to lands too far out | button | **Open** |\n\n<!-- ainotelayer:summary {\"preview\":\"https://preview.example\"} -->"
+        }
+      ],
+      "expect": [
+        {
+          "n": 1,
+          "id": "aaaa1111",
+          "status": "open",
+          "replies": 3,
+          "author": "igor"
+        },
+        {
+          "n": 2,
+          "id": "bbbb2222",
+          "status": "resolved",
+          "replies": 1,
+          "author": "andrey"
+        },
+        {
+          "n": 3,
+          "id": "cccc3333",
+          "status": "open",
+          "replies": 0,
+          "author": "andrey"
+        }
+      ]
+    },
+    {
+      "name": "numbers stay put after an earlier note is deleted",
+      "comments": [
+        {
+          "id": 101,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:01:00Z",
+          "updated_at": "2026-11-17T10:01:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+          "body": "**Note N2** · Change · switch “ICC profiles”\n\n> Second\n\n[Open in the preview](https://preview.example/studies/1#ainote=bbbb2222) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"bbbb2222\",\"text\":\"Second\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"role\":\"switch\",\"label\":\"ICC profiles\"},\"n\":2} -->"
+        },
+        {
+          "id": 102,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:02:00Z",
+          "updated_at": "2026-11-17T10:02:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-102",
+          "body": "**Note N3** · Change · canvas\n\n> Third\n\n[Open in the preview](https://preview.example/studies/1#ainote=cccc3333) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"cccc3333\",\"text\":\"Third\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"canvas\"},\"n\":3} -->"
+        },
+        {
+          "id": 103,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:03:00Z",
+          "updated_at": "2026-11-17T10:03:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-103",
+          "body": "N3: done [resolved]"
+        },
+        {
+          "id": 104,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:04:00Z",
+          "updated_at": "2026-11-17T10:04:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-104",
+          "body": "N2: looking into it"
+        },
+        {
+          "id": 105,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:05:00Z",
+          "updated_at": "2026-11-17T10:05:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-105",
+          "body": "N1: a reply to the deleted note goes nowhere"
+        }
+      ],
+      "expect": [
+        {
+          "n": 2,
+          "id": "bbbb2222",
+          "status": "open",
+          "replies": 1,
+          "author": "andrey"
+        },
+        {
+          "n": 3,
+          "id": "cccc3333",
+          "status": "resolved",
+          "replies": 1,
+          "author": "andrey"
+        }
+      ]
+    },
+    {
+      "name": "two notes created at the same moment claim one number",
+      "comments": [
+        {
+          "id": 101,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:01:00Z",
+          "updated_at": "2026-11-17T10:01:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+          "body": "**Note N1** · Change · button “Go to” · `ViewerToolbar.tsx:99`\n\n> First\n\n[Open in the preview](https://preview.example/studies/1#ainote=aaaa1111) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"First\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\",\"source\":[{\"kind\":\"element\",\"file\":\"src/ViewerToolbar.tsx\",\"line\":99,\"column\":5}]},\"n\":1} -->"
+        },
+        {
+          "id": 102,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:02:00Z",
+          "updated_at": "2026-11-17T10:02:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-102",
+          "body": "**Note N2** · Change · switch “ICC profiles”\n\n> Second, from Igor\n\n[Open in the preview](https://preview.example/studies/1#ainote=bbbb2222) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"bbbb2222\",\"text\":\"Second, from Igor\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"role\":\"switch\",\"label\":\"ICC profiles\"},\"n\":2} -->"
+        },
+        {
+          "id": 103,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:03:00Z",
+          "updated_at": "2026-11-17T10:03:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-103",
+          "body": "**Note N2** · Change · canvas\n\n> Second, from Andrey\n\n[Open in the preview](https://preview.example/studies/1#ainote=cccc3333) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"cccc3333\",\"text\":\"Second, from Andrey\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"canvas\"},\"n\":2} -->"
+        },
+        {
+          "id": 104,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:04:00Z",
+          "updated_at": "2026-11-17T10:04:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-104",
+          "body": "N2: this is about the first one that took the number [fix in place]"
+        },
+        {
+          "id": 105,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:05:00Z",
+          "updated_at": "2026-11-17T10:05:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-105",
+          "body": "N2: the overlay names the note, so this still lands on mine\n\n<!-- ainotelayer:event {\"note\":\"cccc3333\"} -->"
+        }
+      ],
+      "expect": [
+        {
+          "n": 1,
+          "id": "aaaa1111",
+          "status": "open",
+          "replies": 0,
+          "author": "igor"
+        },
+        {
+          "n": 2,
+          "id": "bbbb2222",
+          "status": "fix",
+          "replies": 1,
+          "author": "igor"
+        },
+        {
+          "n": 3,
+          "id": "cccc3333",
+          "status": "open",
+          "replies": 1,
+          "author": "andrey"
+        }
+      ]
+    },
+    {
+      "name": "status words in ordinary text and in links change nothing",
+      "comments": [
+        {
+          "id": 101,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:01:00Z",
+          "updated_at": "2026-11-17T10:01:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+          "body": "**Note N1** · Change · button “Go to” · `ViewerToolbar.tsx:99`\n\n> First\n\n[Open in the preview](https://preview.example/studies/1#ainote=aaaa1111) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"First\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\",\"source\":[{\"kind\":\"element\",\"file\":\"src/ViewerToolbar.tsx\",\"line\":99,\"column\":5}]},\"n\":1} -->"
+        },
+        {
+          "id": 102,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:02:00Z",
+          "updated_at": "2026-11-17T10:02:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-102",
+          "body": "N1: still broken, see [fixed](https://github.com/o/r/commit/abc) for what I tried"
+        },
+        {
+          "id": 103,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:03:00Z",
+          "updated_at": "2026-11-17T10:03:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-103",
+          "body": "N1: I would not call this [resolved] yet."
+        },
+        {
+          "id": 104,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:04:00Z",
+          "updated_at": "2026-11-17T10:04:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-104",
+          "body": "N1: [resolved](https://example.com/issue) is the upstream ticket"
+        },
+        {
+          "id": 105,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:05:00Z",
+          "updated_at": "2026-11-17T10:05:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-105",
+          "body": "N1: typed in the preview: is this [resolved] on master?\n\n<!-- ainotelayer:event {\"note\":\"aaaa1111\"} -->"
+        },
+        {
+          "id": 106,
+          "user": {
+            "login": "andrey",
+            "type": "User"
+          },
+          "author_association": "MEMBER",
+          "created_at": "2026-11-17T10:06:00Z",
+          "updated_at": "2026-11-17T10:06:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-106",
+          "body": "N1: status \"constructor\" is not a status\n\n<!-- ainotelayer:event {\"note\":\"aaaa1111\",\"status\":\"constructor\"} -->"
+        }
+      ],
+      "expect": [
+        {
+          "n": 1,
+          "id": "aaaa1111",
+          "status": "open",
+          "replies": 5,
+          "author": "igor"
+        }
+      ]
+    },
+    {
+      "name": "people outside the repository cannot change other people's notes",
+      "comments": [
+        {
+          "id": 101,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:01:00Z",
+          "updated_at": "2026-11-17T10:01:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+          "body": "**Note N1** · Change · button “Go to” · `ViewerToolbar.tsx:99`\n\n> From a maintainer\n\n[Open in the preview](https://preview.example/studies/1#ainote=aaaa1111) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"From a maintainer\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\",\"source\":[{\"kind\":\"element\",\"file\":\"src/ViewerToolbar.tsx\",\"line\":99,\"column\":5}]},\"n\":1} -->"
+        },
+        {
+          "id": 102,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:02:00Z",
+          "updated_at": "2026-11-17T10:02:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-102",
+          "body": "N1: [resolved]"
+        },
+        {
+          "id": 103,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:03:00Z",
+          "updated_at": "2026-11-17T10:03:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-103",
+          "body": "N1: re-attached to button “Delete”.\n\n<!-- ainotelayer:event {\"note\":\"aaaa1111\",\"anchor\":{\"tag\":\"button\",\"label\":\"Delete\"}} -->"
+        },
+        {
+          "id": 104,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:04:00Z",
+          "updated_at": "2026-11-17T10:04:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-104",
+          "body": "**Note N2** · Change · switch “ICC profiles”\n\n> From a stranger\n\n[Open in the preview](https://preview.example/studies/1#ainote=dddd4444) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"dddd4444\",\"text\":\"From a stranger\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"role\":\"switch\",\"label\":\"ICC profiles\"},\"n\":2} -->"
+        },
+        {
+          "id": 105,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:05:00Z",
+          "updated_at": "2026-11-17T10:05:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-105",
+          "body": "N2: I fixed my own note [fix in place]"
+        },
+        {
+          "id": 106,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:06:00Z",
+          "updated_at": "2026-11-17T10:06:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-106",
+          "body": "N2: thanks, confirmed [resolved]"
+        },
+        {
+          "id": 107,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:07:00Z",
+          "updated_at": "2026-11-17T10:07:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-107",
+          "body": "pretending to be the bot\n\n<!-- ainotelayer:summary {\"preview\":\"https://evil.example\"} -->"
+        }
+      ],
+      "expect": [
+        {
+          "n": 1,
+          "id": "aaaa1111",
+          "status": "open",
+          "replies": 2,
+          "author": "igor"
+        },
+        {
+          "n": 2,
+          "id": "dddd4444",
+          "status": "resolved",
+          "replies": 2,
+          "author": "outsider",
+          "outside": true
+        }
+      ]
+    }
+  ]
+}

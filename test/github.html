@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ainotelayer pull-request store tests</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; }
+      pre { background: #f4f4f5; padding: 12px; border-radius: 6px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Are notes rebuilt correctly from a pull request's comments?
+
+      Builds comments the way the overlay writes them and the way a person or an
+      agent types them on GitHub, then checks what the overlay makes of them.
+      Serve the repository folder with any static server and open this page;
+      the result is in the title and below.
+    -->
+    <h1>ainotelayer pull-request store tests</h1>
+    <pre id="out">running…</pre>
+    <script src="../github-format.js"></script>
+    <script src="../overlay.js"></script>
+    <script>
+      const { noteBody, eventBody, fold } = window.ainotelayer.github
+      let nextId = 100
+      let clock = Date.parse('2026-11-17T10:00:00Z')
+
+      /** A comment as GitHub's API returns it, one second after the previous one */
+      function comment(login, body) {
+        clock += 1000
+        const at = new Date(clock).toISOString()
+        nextId += 1
+        return { id: nextId, body, user: { login }, created_at: at, updated_at: at, html_url: `https://github.com/o/r/pull/1#issuecomment-${nextId}` }
+      }
+
+      function note(id, text, extra = {}) {
+        return {
+          id,
+          text,
+          kind: 'Change',
+          scope: 'page',
+          url: 'https://preview.example/studies/1',
+          path: '/studies/1',
+          sha: 'abc1234',
+          anchor: { tag: 'button', label: 'Go to', xpath: '//*[@id="root"]/button[8]', selector: 'button[aria-label="Go to"]', offset: { x: 0.5, y: 0.5 } },
+          trail: [{ type: 'click', what: 'button', label: 'Display options' }],
+          ...extra,
+        }
+      }
+
+      const results = []
+      function check(name, ok, detail = '') {
+        results.push(ok)
+        lines.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : `  -> ${detail}`}`)
+      }
+      const lines = []
+
+      /** 1. a note survives the trip, including text that could close an HTML comment */
+      {
+        const tricky = 'Arrow --> here, a tag <b>bold</b> and -- dashes'
+        const out = fold([comment('igor', noteBody(note('aaaa1111', tricky), 1))])
+        const got = out.notes.aaaa1111
+        check('a note is rebuilt from its comment', got !== undefined && got.n === 1 && got.status === 'open')
+        check('text with "-->" and tags survives', got?.messages.first.text === tricky, got?.messages.first.text)
+        check('the author is the GitHub account', got?.messages.first.author === '@igor', got?.messages.first.author)
+        check('the anchor and steps come back', got?.anchor.selector === 'button[aria-label="Go to"]' && got?.trail.length === 1)
+        check('the comment link is kept', /issuecomment-/.test(got?.commentUrl ?? ''))
+      }
+
+      /** 2. the visible part is readable on GitHub */
+      {
+        const body = noteBody(note('aaaa1111', 'Lands too far out', { anchor: { tag: 'button', label: 'Go to', source: [{ kind: 'element', file: 'src/ViewerToolbar.tsx', line: 99, column: 5 }] } }), 3)
+        check('the visible summary names the note, element and file', /\*\*Note N3\*\* · Change · button “Go to” · `ViewerToolbar\.tsx:99`/.test(body), body.split('\n')[0])
+        check('the visible summary quotes the text and links to the preview', body.includes('> Lands too far out') && body.includes('#ainote=aaaa1111'))
+      }
+
+      /** 3. replies typed by hand on GitHub, with and without the overlay's hidden marker */
+      {
+        const out = fold([
+          comment('igor', noteBody(note('aaaa1111', 'First'), 1)),
+          comment('andrey', noteBody(note('bbbb2222', 'Second'), 2)),
+          comment('firebase-bot', 'Visit the preview URL for this PR'),
+          comment('andrey', 'N2: also happens on master'),
+          comment('igor', eventBody(1, 'Checking this now', { note: 'aaaa1111' })),
+          comment('andrey', 'Unrelated review comment about the code'),
+          comment('igor', 'N2 - agreed, will fix'),
+        ])
+        const first = Object.values(out.notes.aaaa1111.messages)
+        const second = Object.values(out.notes.bbbb2222.messages)
+        check('notes are numbered in creation order', out.notes.aaaa1111.n === 1 && out.notes.bbbb2222.n === 2)
+        check('a reply written by the overlay lands on its note', first.length === 2 && first[1].text === 'Checking this now', JSON.stringify(first))
+        check('replies typed as "N2: …" and "N2 - …" land on note 2', second.length === 3 && second[1].text === 'also happens on master' && second[2].text === 'agreed, will fix', JSON.stringify(second))
+        check('other comments on the pull request are ignored', Object.keys(out.notes).length === 2)
+      }
+
+      /** 4. status: the latest tag wins, by hand or from the overlay */
+      {
+        const out = fold([
+          comment('igor', noteBody(note('aaaa1111', 'First'), 1)),
+          comment('igor', 'N1: [agent] Fixed in abc1234; the switch waits for tiles. [fix in place]'),
+          comment('andrey', 'N1: confirmed [resolved]'),
+          comment('andrey', eventBody(1, '', { note: 'aaaa1111', status: 'open' })),
+          comment('igor', 'N1: [fixed]'),
+        ])
+        const got = out.notes.aaaa1111
+        const thread = Object.values(got.messages)
+        check('the latest status wins', got.status === 'fix', got.status)
+        check('the status tag is removed from the reply text', thread[1].text === 'Fixed in abc1234; the switch waits for tiles.', thread[1].text)
+        check('[agent] marks an agent reply', thread[1].agent === true && thread[2].agent !== true)
+        check('a status change without text still shows in the thread', thread[3].text === 'Status: Open' && thread[4].text === 'Status: Fix in place', `${thread[3].text} | ${thread[4].text}`)
+      }
+
+      /** 5. a deleted note takes its replies with it, and later notes keep working */
+      {
+        const first = comment('igor', noteBody(note('aaaa1111', 'First'), 1))
+        const out = fold([
+          comment('andrey', noteBody(note('bbbb2222', 'Second'), 2)),
+          comment('andrey', eventBody(1, 'reply to the deleted one', { note: 'aaaa1111' })),
+          comment('igor', eventBody(2, 'reply to the second', { note: 'bbbb2222' })),
+        ])
+        check('replies to a deleted note are dropped', out.notes.aaaa1111 === undefined && Object.keys(out.notes).length === 1 && first.id > 0)
+        check('the remaining note keeps its number and its replies', out.notes.bbbb2222.n === 2 && Object.values(out.notes.bbbb2222.messages).length === 2, String(out.notes.bbbb2222.n))
+      }
+
+      /** 6. re-attach replaces the anchor and remembers the old one */
+      {
+        const moved = { tag: 'button', label: 'Modify', xpath: '//*[@id="root"]/button[3]', selector: 'button[aria-label="Modify"]', offset: { x: 0.5, y: 0.5 } }
+        const out = fold([
+          comment('igor', noteBody(note('aaaa1111', 'First'), 1)),
+          comment('igor', eventBody(1, 're-attached to button “Modify”.', { note: 'aaaa1111', anchor: moved })),
+        ])
+        const got = out.notes.aaaa1111
+        check('a re-attach changes where the note points', got.anchor.label === 'Modify')
+        check('the previous place is kept in the history', got.anchorHistory?.[0]?.label === 'Go to', JSON.stringify(got.anchorHistory))
+      }
+
+      /** 7. the picture travels inside the note and comes out separately */
+      {
+        const picture = 'data:image/webp;base64,AAAA'
+        const out = fold([comment('igor', noteBody(note('aaaa1111', 'On the slide', { shot: picture }), 1))])
+        check('the picture is split from the note', out.shots.aaaa1111 === picture && out.notes.aaaa1111.hasShot === true && out.notes.aaaa1111.shot === undefined)
+      }
+
+      /** 8. an imported note keeps its original author's name */
+      {
+        const out = fold([comment('igor', noteBody(note('aaaa1111', 'From a file', { by: 'AF' }), 1))])
+        check('an imported note names the original author', out.notes.aaaa1111.messages.first.author === 'AF (via @igor)', out.notes.aaaa1111.messages.first.author)
+      }
+
+      /** 9. tags count only at the start or the end, never as link text or mid-sentence */
+      {
+        const out = fold([
+          comment('igor', noteBody(note('aaaa1111', 'First'), 1)),
+          comment('andrey', 'N1: see [fixed](https://example.com/commit) for what I tried'),
+          comment('andrey', eventBody(1, 'typed in the preview: is this [resolved] on master?', { note: 'aaaa1111' })),
+          comment('andrey', 'N1: status "constructor" is not one\n\n<!-- ainotelayer:event {"note":"aaaa1111","status":"constructor"} -->'),
+        ])
+        const got = out.notes.aaaa1111
+        const thread = Object.values(got.messages)
+        check('a status word inside a link or a sentence changes nothing', got.status === 'open', got.status)
+        check('such text is kept as written', thread[1].text.includes('[fixed](https://example.com/commit)') && thread[2].text.endsWith('[resolved] on master?'), thread[2].text)
+      }
+
+      /**
+       * 10. the shared fixture: the same comments the CI reader (github-notes.mjs)
+       * is checked against in test/summary.test.mjs
+       */
+      fetch('./fixtures/pr-comments.json')
+        .then((response) => response.json())
+        .then((fixture) => {
+          for (const scenario of fixture.scenarios) {
+            const out = fold(scenario.comments)
+            const got = Object.values(out.notes)
+              .sort((a, b) => a.n - b.n)
+              .map((item) => ({
+                n: item.n,
+                id: item.id,
+                status: item.status,
+                replies: Object.keys(item.messages).length - 1,
+                author: item.author,
+                ...(item.trusted === false ? { outside: true } : {}),
+              }))
+            check(`shared fixture: ${scenario.name}`, JSON.stringify(got) === JSON.stringify(scenario.expect), JSON.stringify(got))
+          }
+        })
+        .catch((error) => check('the shared fixture could be loaded', false, error.message))
+        .finally(() => {
+          const passed = results.filter(Boolean).length
+          const summary = `${passed === results.length ? 'PASS' : 'FAIL'} ${passed}/${results.length}`
+          document.title = summary
+          document.getElementById('out').textContent = `${summary}\n\n${lines.join('\n')}`
+        })
+    </script>
+  </body>
+</html>

@@ -43,6 +43,9 @@ node server.mjs --target http://localhost:3000 --port 3200 --repo /path/to/app
 Open `http://localhost:3200`. Notes are stored in `notes/`, one JSON file per
 repository and branch.
 
+Add `--pr 123` to use the notes of that pull request instead (see below), so a
+local run and the deployed preview show the same notes.
+
 ## Add it to a built app
 
 Any static build output works. Run this after the build and before the deploy:
@@ -59,6 +62,8 @@ Or as a GitHub Action:
     dir: build
 ```
 
+In a pull-request workflow that is all: notes are kept on the pull request.
+
 [examples/firebase-preview.yml](examples/firebase-preview.yml) is a full
 pull-request preview workflow.
 
@@ -66,18 +71,73 @@ pull-request preview workflow.
 
 | Setup | Notes live in | Shared between reviewers |
 |---|---|---|
+| A pull request (`--github owner/name --pr 123`; automatic in the action) | Comments on that pull request | Yes |
 | Nothing configured | Each reviewer's browser (`localStorage`) | By Download and Import |
 | `--db` / `database-url` | A Firebase Realtime Database | Yes, live |
 | `server.mjs` | Files in `notes/` | Everyone using that server |
+
+### On the pull request
+
+Each note is a comment on the pull request: a readable summary, with the
+note's data in a hidden block. A reply or a status change is one more comment
+that starts with the note's number, so people and agents can answer from GitHub
+itself:
+
+```
+N3: fixed in abc1234 [fix in place]
+```
+
+- A status tag (`[open]`, `[fix in place]`, `[resolved]`) counts only at the
+  very start or the very end of a comment, so a sentence or a link that
+  happens to contain one changes nothing.
+- A note keeps its number for good, also when other notes are deleted.
+- Only collaborators on the repository, and a note's own author, can change a
+  note's status or where it points. From anyone else the reply is kept and the
+  change is ignored.
+- Reading needs no sign-in on a public repository. Without sign-in the list
+  refreshes every few minutes (GitHub allows 60 requests an hour).
+- To add notes or reply from the preview, a reviewer pastes a GitHub token once
+  ("Connect GitHub"). Notes are then posted under their own account. Use a
+  token limited to the repository: the preview page can read it.
+- Notes belong to the pull request, not to a build, so they survive new pushes
+  and expired preview links.
+- Nothing needs to be enabled on the repository and there is no database.
+
+### Overview and merge status
+
+```yaml
+- uses: igoroctaviano/ainotelayer/summary@main
+  with:
+    preview-url: ${{ steps.deploy.outputs.details_url }}
+```
+
+keeps one overview comment on the pull request up to date ("2 of 5
+unresolved", each note with its status and a link) and sets a commit status,
+`ainotelayer/notes`: pending while notes are open or have a fix in place,
+success once all are resolved. Require that status in the branch protection
+rules to hold merges back until the notes are dealt with.
+
+Run it after the deploy, and from a second workflow on `issue_comment` so the
+status follows the conversation:
+[examples/preview-notes.yml](examples/preview-notes.yml). The workflow needs
+`pull-requests: write` and `statuses: write`.
+
+Notes from people without write access to the repository are shown in the
+preview and listed apart in the overview, but they do not count toward the
+status, so a stranger cannot hold a merge back or wave one through. Set
+`trust: everyone` to count every commenter.
+
+### In a database
 
 For the shared database, deploy [database.rules.json](database.rules.json) to a
 Firebase project and pass its URL. Builds with the same `key` share their
 notes, so a pull request keeps its notes across pushes. Pass a `salt` so the
 review id cannot be guessed.
 
-**Anyone who has the preview link can read and write its notes.** Do not use
-the shared database with private data, and do not add the layer to production
-builds.
+**Anyone who has the preview link can read and write those notes.** Do not use
+the shared database with private data.
+
+Do not add the layer to production builds.
 
 ## Notes that name the source file
 
@@ -112,12 +172,14 @@ written (`data-anl-src`) and each component with where it is used
 
 Every build that has the layer serves `/__ainotelayer/agent.md`. Give that URL
 to an agent: it says where the notes are, what each field means, and how to
-reply and change a note's status. With a shared database that is plain HTTP;
-without one, the agent works from the downloaded file and the reviewer imports
-its answers.
+reply and change a note's status. On a pull request that is `gh`; with a shared
+database it is plain HTTP; with neither, the agent works from the downloaded
+file and the reviewer imports its answers.
 
-Note text is written by whoever has the link. The agent page tells agents to
-treat it as untrusted input.
+Note text is written by whoever has the link or can comment. The agent page
+tells agents to treat it as untrusted input, and the layer treats it the same
+way: going to a note only ever presses show/hide controls (never a button a
+note happens to name), and a link to a note never changes page by itself.
 
 ## When the UI changes
 
@@ -136,8 +198,17 @@ npm test
 runs the source-stamping tests. Set `STAMP_SWEEP=/path/to/app/src` to also run
 the pass over a real codebase.
 
-`test/anchors.html` checks note matching against simulated UI changes: serve
-the repository folder with any static server and open the page.
+`test/anchors.html` checks note matching against simulated UI changes, and
+`test/github.html` checks how notes are rebuilt from pull-request comments:
+serve the repository folder with any static server and open the pages.
+
+How notes are written to and read from comments lives in one file,
+`github-format.js`, used by the overlay and by CI.
+`test/fixtures/pr-comments.json` holds the scenarios both are checked against.
+
+`node server.mjs --pr 1 --mock-github ...` runs against a simulated GitHub
+(tokens are `mock-<login>`), to try the pull-request store without touching a
+real one.
 
 `test/rules-test.py` checks the database rules against the Firebase emulator
 (`firebase emulators:start --only database`, which needs Java 21 or newer).
@@ -148,6 +219,8 @@ Tried:
 
 - The proxy, the injector, browser storage and the shared store, on a real
   React app (Vite, React 19).
+- The pull-request store against a simulated GitHub, and reading a real pull
+  request without sign-in.
 - The database rules, on the Firebase emulator.
 - Source stamping on a Vite dev server; the stamping pass on about 800
   component files from two apps without a parse failure.
@@ -155,6 +228,9 @@ Tried:
 Not tried yet:
 
 - A real Firebase project.
+- Writing to a real pull request from the preview with a pasted token.
+- The comment-triggered refresh of the overview (it only runs once the
+  workflow is on the default branch).
 - The GitHub Action in a workflow.
 - The webpack/Rspack loader inside a real build.
 - Production builds with source stamping on.

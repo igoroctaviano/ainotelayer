@@ -1,0 +1,32 @@
+# Example: keep the notes overview and the ainotelayer/notes status of a pull
+# request up to date whenever someone comments. Copy into .github/workflows/.
+#
+# The preview workflow posts the overview once after each deploy (see
+# firebase-preview.yml); this one refreshes it between deploys, so the status
+# follows the conversation. Workflows triggered by comments always run from
+# the default branch, so it starts working once it is merged there.
+#
+# To hold merges back while notes are unresolved, require the
+# "ainotelayer/notes" status in the branch protection rules.
+name: preview-notes
+
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: preview-notes-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  overview:
+    # Comments on plain issues are not about a preview.
+    if: github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: igoroctaviano/ainotelayer/summary@main

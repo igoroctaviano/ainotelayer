@@ -1,124 +1,106 @@
 /**
- * ainotelayer notes on a pull request, read outside the browser.
+ * ainotelayer notes on a pull request, for CI: which notes exist, their
+ * status, how active they are, and the overview comment that says so.
  *
- * In GitHub mode every note is a comment on the pull request, and a reply, a
- * status change or a re-attach is one more comment that starts with the note's
- * number (`N3: fixed in abc123 [fix in place]`). overlay.js rebuilds the notes
- * from those comments in the browser; this module does the same for CI, where
- * only the overview matters: which notes exist, their status, and how active
- * they are.
- *
- * The two must agree. test/fixtures/pr-comments.json is checked against both
- * (test/summary.test.mjs here, test/github.html for the overlay).
+ * Reading the comments is done by github-format.js, the same code the browser
+ * overlay uses; this module only shapes the result for an overview.
  */
+import './github-format.js'
 
-export const STATUS = { open: 'Open', fix: 'Fix in place', resolved: 'Resolved' }
+const format = globalThis.ainotelayerFormat
 
-const HIDDEN = /<!-- ainotelayer:(note|event|summary) ([\s\S]*?) -->/
+export const { STATUS, hiddenBlock, readHidden } = format
 
-/** JSON inside an HTML comment: it must never contain the closing `-->` */
-export function hiddenBlock(kind, data) {
-  const json = JSON.stringify(data).replace(/--/g, '-\\u002d').replace(/>/g, '\\u003e')
-  return `<!-- ainotelayer:${kind} ${json} -->`
-}
-
-export function readHidden(body) {
-  const found = HIDDEN.exec(body ?? '')
-  if (found === null) {
-    return null
-  }
-  try {
-    return { kind: found[1], data: JSON.parse(found[2]) }
-  } catch {
-    return null
-  }
+/**
+ * The notes of a pull request in number order, from its comments as GitHub's
+ * API returns them. `options.trust: 'everyone'` lets any commenter change any
+ * note; by default only collaborators and a note's author can.
+ */
+export function foldNotes(comments, options = {}) {
+  const { notes } = format.fold(comments, options)
+  return Object.values(notes)
+    .sort((a, b) => a.n - b.n)
+    .map((note) => {
+      const anchor = note.anchor ?? {}
+      const source = Array.isArray(anchor.source) ? anchor.source[0] : undefined
+      const thread = Object.values(note.messages)
+      const last = thread[thread.length - 1]
+      return {
+        id: note.id,
+        n: note.n,
+        kind: note.kind ?? 'Change',
+        text: thread[0].text,
+        element: `${anchor.role ?? anchor.tag ?? 'element'}${anchor.label ? ` “${anchor.label}”` : ''}`,
+        source: source === undefined ? '' : `${String(source.file).split('/').pop()}:${source.line}`,
+        author: note.author,
+        /** False for a note from someone without write access to the repository */
+        trusted: note.trusted,
+        status: note.status,
+        replies: thread.length - 1,
+        url: note.commentUrl,
+        createdAt: note.createdAt,
+        lastAt: last.at,
+        lastBy: last.login,
+      }
+    })
 }
 
 /**
- * The notes of a pull request, oldest first, from its comments as GitHub's
- * API returns them. Comments that are neither a note nor addressed to one are
- * ignored.
+ * The overview comment to update, if there is one. Anyone can paste the
+ * overview's marker into a comment, so only a bot's or a collaborator's
+ * counts: otherwise a stranger could plant the "preview" and "agent" links
+ * the overview repeats.
  */
-export function foldNotes(comments) {
-  const ordered = [...comments].sort(
-    (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id,
-  )
-  const notes = []
-  const byId = new Map()
-  for (const comment of ordered) {
-    const hidden = readHidden(comment.body)
-    const login = comment.user?.login ?? 'someone'
-    if (hidden !== null && hidden.kind === 'summary') {
-      continue
+export function findOverview(comments) {
+  return comments.find((comment) => {
+    if (readHidden(comment.body)?.kind !== 'summary') {
+      return false
     }
-    if (hidden !== null && hidden.kind === 'note' && hidden.data?.id) {
-      const data = hidden.data
-      const anchor = data.anchor ?? {}
-      const source = Array.isArray(anchor.source) ? anchor.source[0] : undefined
-      const note = {
-        id: data.id,
-        n: notes.length + 1,
-        kind: data.kind ?? 'Change',
-        text: String(data.text ?? ''),
-        element: `${anchor.role ?? anchor.tag ?? 'element'}${anchor.label ? ` “${anchor.label}”` : ''}`,
-        source: source === undefined ? '' : `${String(source.file).split('/').pop()}:${source.line}`,
-        author: login,
-        status: 'open',
-        replies: 0,
-        url: comment.html_url,
-        createdAt: comment.created_at,
-        lastAt: comment.created_at,
-        lastBy: login,
-      }
-      notes.push(note)
-      byId.set(note.id, note)
-      continue
-    }
-    const visible = String(comment.body ?? '').replace(/<!-- ainotelayer:[\s\S]*?-->/g, '').trim()
-    const addressed = /^N(\d+)\b\s*[:\-–—]?\s*/.exec(visible)
-    const data = hidden !== null && hidden.kind === 'event' ? hidden.data : {}
-    const id = data.note ?? (addressed === null ? undefined : notes[Number(addressed[1]) - 1]?.id)
-    const note = id === undefined ? undefined : byId.get(id)
-    if (note === undefined) {
-      continue
-    }
-    let text = addressed === null ? visible : visible.slice(addressed[0].length)
-    let status = data.status
-    const tagged = /\[(open|fix in place|fix|fixed|resolved)\]/i.exec(text)
-    if (tagged !== null) {
-      const word = tagged[1].toLowerCase()
-      status = status ?? (word === 'open' ? 'open' : word === 'resolved' ? 'resolved' : 'fix')
-      text = text.replace(tagged[0], '').trim()
-    }
-    text = text.replace(/\[agent\]/gi, '').trim()
-    const valid = typeof status === 'string' && Object.hasOwn(STATUS, status)
-    if (valid) {
-      note.status = status
-    }
-    if (text !== '' || valid) {
-      note.replies += 1
-      note.lastAt = comment.created_at
-      note.lastBy = login
-    }
-  }
-  return notes
+    const association = comment.author_association
+    return (
+      comment.user?.type === 'Bot' ||
+      association === undefined ||
+      ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)
+    )
+  })
 }
 
-function cell(text, limit = 90) {
-  const flat = String(text).replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()
-  return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat
+/**
+ * Note text is written by whoever can comment, and the overview is posted by
+ * a bot people trust. Make the text inert: no HTML, links, images, mentions
+ * or table breaks survive.
+ */
+function inert(text, limit = 90) {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim()
+  const cut = flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat
+  return cut
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/([\\`*_~[\]()#!|])/g, '\\$1')
+    .replace(/@/g, '@​')
+    .replace(/:\/\//g, ':​//')
 }
 
 function day(iso) {
   return String(iso ?? '').slice(0, 10)
 }
 
+/**
+ * How many notes are in each state. Notes from people outside the repository
+ * are counted apart (`outside`) and never hold a merge back.
+ */
 export function countNotes(notes) {
-  const counts = { open: 0, fix: 0, resolved: 0 }
+  const counts = { open: 0, fix: 0, resolved: 0, outside: 0 }
   for (const note of notes) {
-    counts[note.status] += 1
+    if (note.trusted === false) {
+      counts.outside += 1
+    } else {
+      counts[note.status] += 1
+    }
   }
-  return { ...counts, total: notes.length, unresolved: counts.open + counts.fix }
+  const total = counts.open + counts.fix + counts.resolved
+  return { ...counts, total, unresolved: counts.open + counts.fix }
 }
 
 /** "2 open, 1 fix in place, 4 resolved", leaving out what there is none of */
@@ -157,18 +139,30 @@ export function summaryBody(notes, options = {}) {
   }
   const lines = [`### Preview notes: ${title}`, '']
   const row = (note) => {
-    const where = note.source === '' ? note.element : `${note.element} · \`${note.source}\``
+    const file = inert(note.source, 60)
+    const where = file === '' ? inert(note.element, 60) : `${inert(note.element, 60)} · ${file}`
     const status = note.status === 'resolved' ? STATUS[note.status] : `**${STATUS[note.status]}**`
-    return `| [N${note.n}](${note.url}) ${cell(note.text)} | ${cell(where, 60)} | ${status} | ${note.replies} | @${note.lastBy}, ${day(note.lastAt)} |`
+    return `| [N${note.n}](${note.url}) ${inert(note.text)} | ${where} | ${status} | ${note.replies} | ${inert(note.lastBy, 40)}, ${day(note.lastAt)} |`
   }
   const head = ['| Note | On | Status | Replies | Last activity |', '|---|---|---|---|---|']
-  const unresolved = notes.filter((note) => note.status !== 'resolved')
-  const resolved = notes.filter((note) => note.status === 'resolved')
+  const folded = (title_, rows) => ['<details>', `<summary>${title_}</summary>`, '', ...head, ...rows, '', '</details>', '']
+  const counted = notes.filter((note) => note.trusted !== false)
+  const unresolved = counted.filter((note) => note.status !== 'resolved')
+  const resolved = counted.filter((note) => note.status === 'resolved')
+  const outside = notes.filter((note) => note.trusted === false)
   if (unresolved.length > 0) {
     lines.push(...head, ...unresolved.map(row), '')
   }
   if (resolved.length > 0) {
-    lines.push('<details>', `<summary>${resolved.length} resolved</summary>`, '', ...head, ...resolved.map(row), '', '</details>', '')
+    lines.push(...folded(`${resolved.length} resolved`, resolved.map(row)))
+  }
+  if (outside.length > 0) {
+    lines.push(
+      ...folded(
+        `${outside.length} from people outside the repository (shown in the preview, not counted here)`,
+        outside.map(row),
+      ),
+    )
   }
   if (preview !== '') {
     lines.push(
@@ -177,7 +171,7 @@ export function summaryBody(notes, options = {}) {
       `For an agent: ${preview}${agentPath}`,
       '',
     )
-  } else if (counts.total > 0) {
+  } else if (notes.length > 0) {
     lines.push('To answer a note from here, start a comment with its number, for example `N3: fixed in abc123 [fix in place]`.', '')
   }
   lines.push(hiddenBlock('summary', preview === '' ? {} : { preview }))

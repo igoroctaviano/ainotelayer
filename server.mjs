@@ -25,7 +25,7 @@ import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
 
-import { agentGuide, slug } from './agent-guide.mjs'
+import { agentGuide, overlayBundle, slug } from './agent-guide.mjs'
 
 const here = import.meta.dirname
 
@@ -345,6 +345,11 @@ async function mockApi(request, response, url) {
   }
   const route = url.pathname.slice(MOCK.length)
   const login = mockLogin(request)
+  if (login === null && request.headers.authorization !== undefined) {
+    /** Like GitHub: a token it does not know is refused, even for reading */
+    json(response, 401, { message: 'Bad credentials' })
+    return
+  }
   if (route === '/user') {
     json(response, login === null ? 401 : 200, login === null ? { message: 'Bad credentials' } : { login })
     return
@@ -371,7 +376,9 @@ async function mockApi(request, response, url) {
       const comment = {
         id: store.next,
         body: String(input?.body ?? ''),
-        user: { login },
+        /** Logins starting with "outsider" stand for people without access to the repository */
+        user: { login, type: /bot$/.test(login) ? 'Bot' : 'User' },
+        author_association: login.startsWith('outsider') ? 'NONE' : 'COLLABORATOR',
         created_at: now,
         updated_at: now,
         html_url: `https://github.com/${list[1]}/${list[2]}/pull/${list[3]}#issuecomment-${store.next}`,
@@ -478,7 +485,7 @@ function serveOwn(request, response, url) {
   const info = meta()
   if (url.pathname === `${PREFIX}/overlay.js`) {
     response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' })
-    response.end(fs.readFileSync(path.join(here, 'overlay.js')))
+    response.end(overlayBundle(here))
     return
   }
   if (url.pathname === `${PREFIX}/agent.md`) {

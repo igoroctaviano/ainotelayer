@@ -22,6 +22,7 @@
     <h1>ainotelayer anchor tests</h1>
     <div id="fixture"></div>
     <pre id="out">running…</pre>
+    <script src="../github-format.js"></script>
     <script src="../overlay.js"></script>
     <script>
       const SCENARIOS = [
@@ -123,6 +124,27 @@
           const where = landed === null ? 'nothing' : landed === name ? 'itself' : `WRONG element "${landed}"`
           lines.push(`  ${ok ? 'PASS' : 'FAIL'}  ${name}: expected ${expected}, got ${how} (${where})`)
         }
+      }
+      /**
+       * Going to a note presses the control that opens what the note sits in.
+       * What a note says about that control comes from whoever wrote the note,
+       * so it may only ever be a show/hide control.
+       */
+      fixture.innerHTML = `<button id="danger" aria-label="Delete study">Delete</button><button id="panel-toggle" aria-expanded="false">Display options</button><div role="tablist"><button role="tab" id="tab-b">Layers</button></div>`
+      const openerCases = [
+        ['an ordinary button named by selector is never an opener', { label: '', selector: '#danger' }, null],
+        ['not even with its own name copied into the note', { label: 'Delete study', selector: '#danger', xpath: '//*[@id="danger"]' }, null],
+        ['a show/hide control is found by selector', { label: 'Display options', selector: '#panel-toggle' }, 'panel-toggle'],
+        ['a show/hide control is found by name when the selector is stale', { label: 'Display options ICC on', selector: '#gone' }, 'panel-toggle'],
+        ['a tab is an opener', { label: 'Layers', selector: '#tab-b' }, 'tab-b'],
+      ]
+      lines.push('what going to a note may press')
+      for (const [name, opener, expected] of openerCases) {
+        const got = window.ainotelayer.opener(opener)
+        const ok = (got === null ? null : got.id) === expected
+        total += 1
+        passed += ok ? 1 : 0
+        lines.push(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`)
       }
       fixture.innerHTML = ''
       const summary = `${passed === total ? 'PASS' : 'FAIL'} ${passed}/${total}`

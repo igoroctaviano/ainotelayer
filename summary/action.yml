@@ -17,6 +17,11 @@ inputs:
       Status while notes are unresolved: pending (default), failure, or success
       to never hold a merge back.
     default: pending
+  trust:
+    description: >
+      Whose notes and status changes count toward the status: collaborators
+      (default; a note's author may always change their own note) or everyone.
+    default: collaborators
   github-token:
     description: Token that can comment on the pull request and set commit statuses
     default: ${{ github.token }}
@@ -39,6 +44,7 @@ runs:
         NOTES_PR: ${{ inputs.pr }}
         NOTES_PREVIEW: ${{ inputs.preview-url }}
         NOTES_UNRESOLVED: ${{ inputs.unresolved }}
+        NOTES_TRUST: ${{ inputs.trust }}
       run: |
         if [ -z "$NOTES_PR" ]; then
           echo "ainotelayer: this run is not for a pull request; nothing to do"
@@ -47,4 +53,5 @@ runs:
         node "$GITHUB_ACTION_PATH/../summary.mjs" \
           --pr "$NOTES_PR" \
           --preview-url "$NOTES_PREVIEW" \
-          --unresolved "$NOTES_UNRESOLVED"
+          --unresolved "$NOTES_UNRESOLVED" \
+          --trust "$NOTES_TRUST"

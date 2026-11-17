@@ -31,7 +31,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { agentGuide, restUrl, reviewId } from './agent-guide.mjs'
+import { agentGuide, overlayBundle, restUrl, reviewId } from './agent-guide.mjs'
 
 const here = import.meta.dirname
 
@@ -96,7 +96,7 @@ const meta = {
 
 const own = path.join(dir, '__ainotelayer')
 fs.mkdirSync(own, { recursive: true })
-fs.copyFileSync(path.join(here, 'overlay.js'), path.join(own, 'overlay.js'))
+fs.writeFileSync(path.join(own, 'overlay.js'), overlayBundle(here))
 fs.writeFileSync(path.join(own, 'agent.md'), agentGuide({ db, review, meta, github }))
 fs.writeFileSync(path.join(own, 'config.json'), `${JSON.stringify({ db, review, meta, github }, null, 2)}\n`)
 

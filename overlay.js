@@ -30,7 +30,9 @@
   const GH_REPO = tag?.dataset.github ?? ''
   const GH_PR = tag?.dataset.pr ?? ''
   const GH_API = (tag?.dataset.githubApi ?? 'https://api.github.com').replace(/\/$/, '')
-  const GITHUB = !SHARED && GH_REPO !== '' && GH_PR !== ''
+  /** How notes are written to and read from comments: github-format.js, loaded in front of this file */
+  const FORMAT = globalThis.ainotelayerFormat
+  const GITHUB = !SHARED && GH_REPO !== '' && GH_PR !== '' && FORMAT !== undefined
   const GH_TOKEN = 'ainotelayer-gh-token'
   const GH_LOGIN = 'ainotelayer-gh-login'
   const [DB, DB_QUERY] = (tag?.dataset.db ?? '').split('?')
@@ -284,8 +286,12 @@
     polls: 0,
     since: '',
     problem: '',
+    /** Something the reviewer should know that is not a failed load, such as a rejected token */
+    notice: '',
     login: '',
     health: {},
+    version: 0,
+    folded: null,
   }
 
   function ghToken() {
@@ -294,6 +300,17 @@
     } catch {
       return ''
     }
+  }
+
+  function ghForget() {
+    try {
+      sessionStorage.removeItem(GH_TOKEN)
+      localStorage.removeItem(GH_TOKEN)
+      localStorage.removeItem(GH_LOGIN)
+    } catch {
+      /** Nothing was stored */
+    }
+    gh.login = ''
   }
 
   async function ghFetch(pathname, options = {}) {
@@ -310,6 +327,21 @@
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     })
+    if (response.status === 401 && token !== '') {
+      /**
+       * The saved token was rejected, most likely expired. Drop it: reading
+       * goes on without sign-in, and writing asks to connect again.
+       */
+      ghForget()
+      gh.notice = 'GitHub no longer accepts the saved token (it may have expired). Connect again to add notes.'
+      if ((options.method ?? 'GET') === 'GET') {
+        return ghFetch(pathname, options)
+      }
+      openConnect()
+      const error = new Error(gh.notice)
+      error.connect = true
+      throw error
+    }
     if (!response.ok) {
       const spent = response.headers.get('x-ratelimit-remaining') === '0'
       let problem = `GitHub answered ${response.status}.`
@@ -317,8 +349,6 @@
         problem = token === ''
           ? "GitHub's hourly allowance for reading without sign-in is used up. Connect GitHub to keep going."
           : "GitHub's hourly allowance is used up. Try again later."
-      } else if (response.status === 401) {
-        problem = 'GitHub did not accept the saved token. Connect again.'
       } else if (response.status === 404) {
         problem = token === ''
           ? 'This pull request was not found. If the repository is private, connect GitHub.'
@@ -333,138 +363,26 @@
     return response.status === 204 ? null : response.json()
   }
 
-  /** JSON inside an HTML comment: it must never contain the closing `-->` */
-  function hiddenBlock(kind, data) {
-    const json = JSON.stringify(data).replace(/--/g, '-\\u002d').replace(/>/g, '\\u003e')
-    return `<!-- ainotelayer:${kind} ${json} -->`
-  }
-
-  function readHidden(body) {
-    const found = /<!-- ainotelayer:(note|event) ([\s\S]*?) -->/.exec(body ?? '')
-    if (found === null) {
-      return null
-    }
-    try {
-      return { kind: found[1], data: JSON.parse(found[2]) }
-    } catch {
-      return null
-    }
-  }
-
-  const STATUS_TAG = { open: '[open]', fix: '[fix in place]', resolved: '[resolved]' }
-
-  /** What people see on GitHub for a note, with the note's data hidden below it */
-  function noteBody(note, number) {
-    const anchor = note.anchor ?? {}
-    const name = anchor.label ? ` “${anchor.label}”` : ''
-    const first = list(anchor.source)[0]
-    const from = first === undefined ? '' : ` · \`${first.file.split('/').pop()}:${first.line}\``
-    const quoted = String(note.text ?? '').split('\n').map((line) => `> ${line}`).join('\n')
-    const link = note.url ? `[Open in the preview](${note.url}${note.url.includes('#') ? '' : `#ainote=${note.id}`})` : ''
-    const build = note.sha ? ` · build \`${note.sha}\`` : ''
-    return [
-      `**Note N${number}** · ${note.kind} · ${anchor.role ?? anchor.tag ?? 'element'}${name}${from}`,
-      '',
-      quoted,
-      '',
-      `${link}${build}`,
-      '',
-      hiddenBlock('note', note),
-    ].join('\n')
-  }
-
-  /** A reply, a status change or a re-attach: one line a person could also type by hand */
-  function eventBody(number, text, data) {
-    const tag = data.status === undefined ? '' : ` ${STATUS_TAG[data.status] ?? ''}`
-    return `N${number}: ${text}${tag}\n\n${hiddenBlock('event', data)}`
+  /** Something about the comments changed: the notes need rebuilding */
+  function ghChanged() {
+    gh.version += 1
   }
 
   /**
-   * Rebuild the notes from the pull request's comments, oldest first. Comments
-   * that are neither a note nor addressed to one (`N3: …`) are ignored.
+   * The notes as the pull request's comments describe them. Rebuilding parses
+   * every comment, so the result is kept until the comments change.
    */
-  function foldComments(comments) {
-    const ordered = [...comments].sort(
-      (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id,
-    )
-    const notes = {}
-    const shots = {}
-    const byNumber = {}
-    let count = 0
-    for (const comment of ordered) {
-      const hidden = readHidden(comment.body)
-      const login = comment.user?.login ?? 'someone'
-      if (hidden !== null && hidden.kind === 'note' && hidden.data?.id) {
-        const { shot, text, by, ...fields } = hidden.data
-        count += 1
-        byNumber[count] = fields.id
-        if (typeof shot === 'string') {
-          shots[fields.id] = shot
-        }
-        notes[fields.id] = {
-          ...fields,
-          n: count,
-          status: 'open',
-          createdAt: comment.created_at,
-          hasShot: typeof shot === 'string',
-          commentId: comment.id,
-          commentUrl: comment.html_url,
-          messages: {
-            first: { author: by ? `${by} (via @${login})` : `@${login}`, text: text ?? '', at: comment.created_at },
-          },
-        }
-        continue
-      }
-      /** Not a note: is it addressed to one, by hidden id or by "N3:" at the start? */
-      const visible = String(comment.body ?? '').replace(/<!-- ainotelayer:[\s\S]*?-->/g, '').trim()
-      const addressed = /^N(\d+)\b\s*[:\-–—]?\s*/.exec(visible)
-      const data = hidden !== null && hidden.kind === 'event' ? hidden.data : {}
-      const id = data.note ?? (addressed === null ? undefined : byNumber[Number(addressed[1])])
-      const note = id === undefined ? undefined : notes[id]
-      if (note === undefined) {
-        continue
-      }
-      let text = addressed === null ? visible : visible.slice(addressed[0].length)
-      let status = data.status
-      const tagged = /\[(open|fix in place|fix|fixed|resolved)\]/i.exec(text)
-      if (tagged !== null) {
-        const word = tagged[1].toLowerCase()
-        status = status ?? (word === 'open' ? 'open' : word === 'resolved' ? 'resolved' : 'fix')
-        text = text.replace(tagged[0], '').trim()
-      }
-      const agent = data.agent === true || /\[agent\]/i.test(text)
-      text = text.replace(/\[agent\]/gi, '').trim()
-      if (status in STATUS) {
-        note.status = status
-      }
-      if (data.resolution !== undefined) {
-        note.resolution = data.resolution
-      }
-      if (data.anchor !== undefined) {
-        note.anchorHistory = [
-          ...list(note.anchorHistory),
-          { xpath: note.anchor?.xpath, selector: note.anchor?.selector, label: note.anchor?.label, replacedAt: comment.created_at },
-        ].slice(-5)
-        note.anchor = data.anchor
-      }
-      if (text === '' && status in STATUS) {
-        text = `Status: ${STATUS[status][0]}`
-      }
-      if (text !== '') {
-        note.messages[`c${comment.id}`] = {
-          author: data.by ? `${data.by} (via @${login})` : `@${login}`,
-          text,
-          at: comment.created_at,
-          ...(agent ? { agent: true } : {}),
+  function ghFold() {
+    if (gh.folded === null || gh.folded.version !== gh.version) {
+      const value = FORMAT.fold([...gh.comments.values()])
+      for (const [id, health] of Object.entries(gh.health)) {
+        if (value.notes[id] !== undefined) {
+          value.notes[id].health = health
         }
       }
+      gh.folded = { version: gh.version, value }
     }
-    for (const [id, health] of Object.entries(gh.health)) {
-      if (notes[id] !== undefined) {
-        notes[id].health = health
-      }
-    }
-    return { notes, shots }
+    return gh.folded.value
   }
 
   /** Bring the comment list up to date: everything once, then only what changed */
@@ -497,6 +415,9 @@
           gh.since = comment.updated_at
         }
       }
+      if (full || fresh.length > 0) {
+        ghChanged()
+      }
       gh.loaded = true
       gh.problem = ''
     } catch (error) {
@@ -520,6 +441,7 @@
     ghRequireToken()
     const comment = await ghFetch(`/repos/${GH_REPO}/issues/${GH_PR}/comments`, { method: 'POST', body: { body } })
     gh.comments.set(comment.id, comment)
+    ghChanged()
     return comment
   }
 
@@ -556,7 +478,7 @@
       if (area === 'notes') {
         await ghLoad(false)
       }
-      const folded = foldComments(gh.comments.values())
+      const folded = ghFold()
       const tree = area === 'shots' ? folded.shots : folded.notes
       return id === undefined ? tree : (tree[id] ?? null)
     }
@@ -564,7 +486,7 @@
       /** The picture travels inside the note's own comment */
       return null
     }
-    const current = foldComments(gh.comments.values()).notes[id]
+    const current = ghFold().notes[id]
     if (method === 'PUT' && sub === undefined) {
       const { messages, n, status, hasShot, createdAt, health, shot, ...fields } = body
       const first = messages?.first ?? {}
@@ -575,16 +497,17 @@
       if (typeof shot === 'string') {
         data.shot = await shrinkShot(shot)
       }
-      const number = Object.keys(foldComments(gh.comments.values()).notes).length + 1
-      let text = noteBody(data, number)
+      /** One past the highest number in use; the note keeps it even if earlier notes are deleted */
+      const number = Object.values(ghFold().notes).reduce((highest, item) => Math.max(highest, item.n), 0) + 1
+      let text = FORMAT.noteBody(data, number)
       if (text.length > 60_000) {
         /** Drop the picture, then the steps, before giving up on the note */
         delete data.shot
-        text = noteBody(data, number)
+        text = FORMAT.noteBody(data, number)
       }
       if (text.length > 60_000) {
         data.trail = list(data.trail).slice(-5)
-        text = noteBody(data, number)
+        text = FORMAT.noteBody(data, number)
       }
       await ghPost(text)
       return body
@@ -603,6 +526,7 @@
         throw error
       }
       gh.comments.delete(current.commentId)
+      ghChanged()
       return null
     }
     if (sub === 'messages') {
@@ -614,7 +538,7 @@
       if (body.agent === true) {
         data.agent = true
       }
-      await ghPost(eventBody(current.n, body.text ?? '', data))
+      await ghPost(FORMAT.eventBody(current.n, body.text ?? '', data))
       return body
     }
     if (method === 'PATCH') {
@@ -625,6 +549,7 @@
         } else {
           gh.health[id] = body.health
         }
+        ghChanged()
         return body
       }
       delete gh.health[id]
@@ -642,7 +567,7 @@
         const label = body.anchor.label ? ` “${body.anchor.label}”` : ''
         text = `re-attached to ${body.anchor.role ?? body.anchor.tag}${label}.`
       }
-      await ghPost(eventBody(current.n, text, data))
+      await ghPost(FORMAT.eventBody(current.n, text, data))
       return body
     }
     throw new Error(`Not supported on a pull request: ${method} ${pathname}`)
@@ -660,14 +585,8 @@
   }
 
   function ghDisconnect() {
-    try {
-      sessionStorage.removeItem(GH_TOKEN)
-      localStorage.removeItem(GH_TOKEN)
-      localStorage.removeItem(GH_LOGIN)
-    } catch {
-      /** Nothing was stored */
-    }
-    gh.login = ''
+    ghForget()
+    gh.notice = ''
     renderPins()
   }
 
@@ -698,6 +617,7 @@
           localStorage.setItem(GH_TOKEN, token)
         }
         localStorage.setItem(GH_LOGIN, gh.login)
+        gh.notice = ''
         closeConnect()
         await ghLoad(true).catch(() => {})
         refresh()
@@ -762,8 +682,10 @@
     } else {
       line.append(`Signed in as @${gh.login || '…'}. `, h('button', { class: 'link', onclick: ghDisconnect }, 'Disconnect'))
     }
-    if (gh.problem !== '') {
-      line.append(h('div', { class: 'hint', style: 'margin:6px 0 0' }, gh.problem))
+    for (const message of [gh.notice, gh.problem]) {
+      if (message !== '') {
+        line.append(h('div', { class: 'hint', style: 'margin:6px 0 0' }, message))
+      }
     }
     return line
   }
@@ -835,7 +757,7 @@
     return {
       ...raw,
       id,
-      status: raw.status in STATUS ? raw.status : 'open',
+      status: Object.hasOwn(STATUS, raw.status ?? '') ? raw.status : 'open',
       kind: raw.kind ?? KINDS[0],
       anchor: {
         ...anchor,
@@ -2177,11 +2099,21 @@
     return String(label ?? '').toLowerCase().split(' ').slice(0, 2).join(' ')
   }
 
+  /**
+   * Controls whose job is to show or hide something: the only kind going to a
+   * note is allowed to press. What a note says about its opener comes from
+   * whoever wrote the note, so it must never be able to name an arbitrary
+   * button (Delete, Save, Sign out) and have it clicked.
+   */
+  const TOGGLER = '[aria-expanded],[aria-haspopup],[role="tab"],summary'
+
   /** The control that opens a container: by selector, then XPath, then by name */
   function findOpener(opener) {
     const wanted = nameKey(opener.label)
     const fits = (element) =>
-      element instanceof Element && (wanted === '' || nameKey(labelOf(element)) === wanted)
+      element instanceof Element &&
+      element.matches(TOGGLER) &&
+      (wanted === '' || nameKey(labelOf(element)) === wanted)
     try {
       const matches = document.querySelectorAll(opener.selector)
       if (matches.length === 1 && fits(matches[0])) {
@@ -2207,9 +2139,7 @@
       }
     }
     if (wanted !== '') {
-      const togglers = document.querySelectorAll(
-        '[aria-expanded],[aria-controls],[aria-haspopup],[role="tab"],summary',
-      )
+      const togglers = document.querySelectorAll(TOGGLER)
       for (const element of togglers) {
         if (nameKey(labelOf(element)) === wanted) {
           return element
@@ -2253,7 +2183,12 @@
    * menu it sits inside (outermost first), scroll it into view, then expand
    * the note on it. `patience` is how long to wait for the app to show things.
    */
-  async function reveal(note, patience = 1500) {
+  async function reveal(note, patience = 1500, navigate = true) {
+    if (!onThisPage(note) && !navigate) {
+      /** Opened from a link or after a page change: show it, let the reviewer choose to go */
+      openCard(note.id)
+      return
+    }
     if (!onThisPage(note)) {
       try {
         sessionStorage.setItem(OPEN, note.id)
@@ -2700,7 +2635,8 @@
   }
   state.locate = (anchor) => locate({ ...anchor, label: anchor.label ?? '' })
   /** The pull-request format, for tests and for tools that write notes */
-  state.github = { noteBody, eventBody, fold: (comments) => foldComments(comments) }
+  state.github = FORMAT
+  state.opener = findOpener
 
   /** The notes in the shape of a review doc: one section per observation */
   function exportMarkdown() {
@@ -2824,8 +2760,12 @@
     }
     const waiting = state.notes.find((note) => note.id === pending)
     if (waiting !== undefined) {
-      /** The app is still starting after the page change, so wait longer for it */
-      reveal(waiting, 10_000)
+      /**
+       * The app is still starting after the page change, so wait longer for it.
+       * No page change from here: a link must not be able to send the reviewer
+       * somewhere else, and a redirect must not cause a loop.
+       */
+      reveal(waiting, 10_000, false)
     }
   })
   if (GITHUB && ghToken() !== '') {

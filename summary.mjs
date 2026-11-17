@@ -14,6 +14,9 @@
  *   --preview-url <url>   link to the deployed preview; remembered between runs
  *   --unresolved <state>  status while notes are unresolved: pending (default),
  *                         failure, or success to never hold a merge back
+ *   --trust <who>         whose notes and status changes count: collaborators
+ *                         (default; a note's author may always change their own
+ *                         note) or everyone
  *   --sha <sha>           commit to put the status on (default: the pull
  *                         request's head)
  *   --api <url>           GitHub API base (default: GITHUB_API_URL)
@@ -25,7 +28,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 
-import { countNotes, describeCounts, foldNotes, readHidden, summaryBody } from './github-notes.mjs'
+import { countNotes, describeCounts, findOverview, foldNotes, readHidden, summaryBody } from './github-notes.mjs'
 
 const CONTEXT = 'ainotelayer/notes'
 
@@ -41,6 +44,7 @@ const token = process.env.GITHUB_TOKEN ?? ''
 const dryRun = process.argv.includes('--dry-run')
 const useGh = process.argv.includes('--gh')
 const whenUnresolved = arg('unresolved', 'pending')
+const trust = arg('trust', 'collaborators')
 
 if (repo === '' || pull === '') {
   console.error('ainotelayer: --repo and --pr are needed (this run may not be for a pull request)')
@@ -48,6 +52,10 @@ if (repo === '' || pull === '') {
 }
 if (!['pending', 'failure', 'success'].includes(whenUnresolved)) {
   console.error('ainotelayer: --unresolved must be pending, failure or success')
+  process.exit(1)
+}
+if (!['collaborators', 'everyone'].includes(trust)) {
+  console.error('ainotelayer: --trust must be collaborators or everyone')
   process.exit(1)
 }
 
@@ -109,9 +117,9 @@ async function allComments() {
 }
 
 const comments = await allComments()
-const notes = foldNotes(comments)
+const notes = foldNotes(comments, { trust })
 const counts = countNotes(notes)
-const existing = comments.find((comment) => readHidden(comment.body)?.kind === 'summary')
+const existing = findOverview(comments)
 const remembered = existing === undefined ? '' : (readHidden(existing.body).data?.preview ?? '')
 const previewUrl = arg('preview-url') || remembered
 const body = summaryBody(notes, { previewUrl })
@@ -130,8 +138,17 @@ if (dryRun) {
   process.exit(0)
 }
 
+/** A pull request from a fork gets a read-only token: say so, do not fail the build */
+function cannotWrite(error, what) {
+  if (error.status === 401 || error.status === 403 || error.status === 404) {
+    console.warn(`ainotelayer: could not ${what} (${error.message}). The workflow needs "pull-requests: write" and "statuses: write", and pull requests from forks cannot write at all.`)
+    return
+  }
+  throw error
+}
+
 /** Without a preview link and without notes there is nothing worth a comment yet */
-const worthSaying = counts.total > 0 || previewUrl !== ''
+const worthSaying = notes.length > 0 || previewUrl !== ''
 let overview = existing
 try {
   if (existing === undefined && worthSaying) {
@@ -143,6 +160,12 @@ try {
   } else {
     console.log('ainotelayer: the notes overview is already up to date')
   }
+} catch (error) {
+  cannotWrite(error, 'write the notes overview')
+}
+
+/** The status is set whether or not the overview could be written */
+try {
   const sha = arg('sha') || (await github(`/repos/${repo}/pulls/${pull}`)).head.sha
   /** Statuses pile up on a commit, so only add one when it says something new */
   const history = await github(`/repos/${repo}/commits/${sha}/statuses?per_page=100`)
@@ -157,12 +180,7 @@ try {
     console.log(`ainotelayer: status ${status.state}: ${status.description}`)
   }
 } catch (error) {
-  if (error.status === 401 || error.status === 403 || error.status === 404) {
-    /** A pull request from a fork gets a read-only token: say so, do not fail the build */
-    console.warn(`ainotelayer: could not write to the pull request (${error.message}). The workflow needs "pull-requests: write" and "statuses: write", and pull requests from forks cannot write at all.`)
-  } else {
-    throw error
-  }
+  cannotWrite(error, 'set the notes status')
 }
 
 if (process.env.GITHUB_OUTPUT) {

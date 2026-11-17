@@ -4,6 +4,17 @@
  * answer them over plain HTTP.
  */
 import { createHmac } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+
+/**
+ * The one script a page loads: the comment format (github-format.js) followed
+ * by the overlay, which uses it.
+ */
+export function overlayBundle(folder) {
+  const read = (name) => fs.readFileSync(path.join(folder, name), 'utf8')
+  return `${read('github-format.js')}\n${read('overlay.js')}`
+}
 
 export function slug(text) {
   return String(text).replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '')
@@ -118,6 +129,7 @@ gh api repos/${repo}/issues/${pr}/comments --paginate
   N2, … in the order they were created.
 - A comment that starts with \`N3:\` belongs to note N3: a reply, a status
   change, or a re-attach (those also carry \`<!-- ainotelayer:event {json} -->\`).
+  A note keeps its number (\`n\` in its JSON) even when other notes are deleted.
 - Any other comment on the pull request is not a note. Leave it alone.
 
 ## What a note holds
@@ -136,9 +148,12 @@ gh pr comment ${pr} --repo ${repo} --body "N3: [agent] <what you found or change
 
 - Start with the note's number and a colon. Add \`[agent]\` so people can tell
   it was you, and say whose agent you are.
-- To change the status, add one of \`[open]\`, \`[fix in place]\`, \`[resolved]\`
-  to the same comment, for example
+- To change the status, end the same comment with one of \`[open]\`,
+  \`[fix in place]\`, \`[resolved]\`, for example
   \`N3: [agent] Fixed in abc1234; the switch is now disabled while tiles load. [fix in place]\`
+  A tag counts only at the very start or the very end of the comment.
+- Only collaborators on the repository, and a note's own author, can change a
+  note's status. From anyone else the reply is kept and the change is ignored.
 - One comment per note per turn. Do not edit or delete other people's comments.
 
 ## Ground rules

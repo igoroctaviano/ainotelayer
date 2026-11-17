@@ -87,6 +87,13 @@ itself:
 N3: fixed in abc1234 [fix in place]
 ```
 
+- A status tag (`[open]`, `[fix in place]`, `[resolved]`) counts only at the
+  very start or the very end of a comment, so a sentence or a link that
+  happens to contain one changes nothing.
+- A note keeps its number for good, also when other notes are deleted.
+- Only collaborators on the repository, and a note's own author, can change a
+  note's status or where it points. From anyone else the reply is kept and the
+  change is ignored.
 - Reading needs no sign-in on a public repository. Without sign-in the list
   refreshes every few minutes (GitHub allows 60 requests an hour).
 - To add notes or reply from the preview, a reviewer pastes a GitHub token once
@@ -114,6 +121,11 @@ Run it after the deploy, and from a second workflow on `issue_comment` so the
 status follows the conversation:
 [examples/preview-notes.yml](examples/preview-notes.yml). The workflow needs
 `pull-requests: write` and `statuses: write`.
+
+Notes from people without write access to the repository are shown in the
+preview and listed apart in the overview, but they do not count toward the
+status, so a stranger cannot hold a merge back or wave one through. Set
+`trust: everyone` to count every commenter.
 
 ### In a database
 
@@ -164,8 +176,10 @@ reply and change a note's status. On a pull request that is `gh`; with a shared
 database it is plain HTTP; with neither, the agent works from the downloaded
 file and the reviewer imports its answers.
 
-Note text is written by whoever has the link. The agent page tells agents to
-treat it as untrusted input.
+Note text is written by whoever has the link or can comment. The agent page
+tells agents to treat it as untrusted input, and the layer treats it the same
+way: going to a note only ever presses show/hide controls (never a button a
+note happens to name), and a link to a note never changes page by itself.
 
 ## When the UI changes
 
@@ -187,6 +201,10 @@ the pass over a real codebase.
 `test/anchors.html` checks note matching against simulated UI changes, and
 `test/github.html` checks how notes are rebuilt from pull-request comments:
 serve the repository folder with any static server and open the pages.
+
+How notes are written to and read from comments lives in one file,
+`github-format.js`, used by the overlay and by CI.
+`test/fixtures/pr-comments.json` holds the scenarios both are checked against.
 
 `node server.mjs --pr 1 --mock-github ...` runs against a simulated GitHub
 (tokens are `mock-<login>`), to try the pull-request store without touching a

@@ -19,6 +19,7 @@
     -->
     <h1>ainotelayer pull-request store tests</h1>
     <pre id="out">running…</pre>
+    <script src="../github-format.js"></script>
     <script src="../overlay.js"></script>
     <script>
       const { noteBody, eventBody, fold } = window.ainotelayer.github
@@ -119,7 +120,7 @@
           comment('igor', eventBody(2, 'reply to the second', { note: 'bbbb2222' })),
         ])
         check('replies to a deleted note are dropped', out.notes.aaaa1111 === undefined && Object.keys(out.notes).length === 1 && first.id > 0)
-        check('replies carrying the note id still find their note after renumbering', Object.values(out.notes.bbbb2222.messages).length === 2)
+        check('the remaining note keeps its number and its replies', out.notes.bbbb2222.n === 2 && Object.values(out.notes.bbbb2222.messages).length === 2, String(out.notes.bbbb2222.n))
       }
 
       /** 6. re-attach replaces the anchor and remembers the old one */
@@ -147,24 +148,41 @@
         check('an imported note names the original author', out.notes.aaaa1111.messages.first.author === 'AF (via @igor)', out.notes.aaaa1111.messages.first.author)
       }
 
+      /** 9. tags count only at the start or the end, never as link text or mid-sentence */
+      {
+        const out = fold([
+          comment('igor', noteBody(note('aaaa1111', 'First'), 1)),
+          comment('andrey', 'N1: see [fixed](https://example.com/commit) for what I tried'),
+          comment('andrey', eventBody(1, 'typed in the preview: is this [resolved] on master?', { note: 'aaaa1111' })),
+          comment('andrey', 'N1: status "constructor" is not one\n\n<!-- ainotelayer:event {"note":"aaaa1111","status":"constructor"} -->'),
+        ])
+        const got = out.notes.aaaa1111
+        const thread = Object.values(got.messages)
+        check('a status word inside a link or a sentence changes nothing', got.status === 'open', got.status)
+        check('such text is kept as written', thread[1].text.includes('[fixed](https://example.com/commit)') && thread[2].text.endsWith('[resolved] on master?'), thread[2].text)
+      }
+
       /**
-       * 9. the shared fixture: the same comments the CI reader (github-notes.mjs)
+       * 10. the shared fixture: the same comments the CI reader (github-notes.mjs)
        * is checked against in test/summary.test.mjs
        */
       fetch('./fixtures/pr-comments.json')
         .then((response) => response.json())
         .then((fixture) => {
-          const out = fold(fixture.comments)
-          const got = Object.values(out.notes)
-            .sort((a, b) => a.n - b.n)
-            .map((item) => ({
-              n: item.n,
-              id: item.id,
-              status: item.status,
-              replies: Object.keys(item.messages).length - 1,
-              author: item.messages.first.author.replace(/^@/, ''),
-            }))
-          check('the shared fixture folds the same way as in CI', JSON.stringify(got) === JSON.stringify(fixture.expect), JSON.stringify(got))
+          for (const scenario of fixture.scenarios) {
+            const out = fold(scenario.comments)
+            const got = Object.values(out.notes)
+              .sort((a, b) => a.n - b.n)
+              .map((item) => ({
+                n: item.n,
+                id: item.id,
+                status: item.status,
+                replies: Object.keys(item.messages).length - 1,
+                author: item.author,
+                ...(item.trusted === false ? { outside: true } : {}),
+              }))
+            check(`shared fixture: ${scenario.name}`, JSON.stringify(got) === JSON.stringify(scenario.expect), JSON.stringify(got))
+          }
         })
         .catch((error) => check('the shared fixture could be loaded', false, error.message))
         .finally(() => {

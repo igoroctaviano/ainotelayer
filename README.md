@@ -168,6 +168,36 @@ Then build with `AINOTELAYER=1`. Each JSX element is tagged with where it is
 written (`data-anl-src`) and each component with where it is used
 (`data-anl-use`).
 
+For a Vite app this also works without touching the app: in CI, the `stamp`
+action wraps the app's own Vite config from outside.
+
+```yaml
+- id: stamp
+  uses: igoroctaviano/ainotelayer/stamp@main
+- run: npm run build -- --config "${{ steps.stamp.outputs.config }}" --configLoader native
+```
+
+It needs Node 22.18 or newer when the app's Vite config is TypeScript.
+
+## Only when asked: a manually run preview
+
+To keep ordinary previews as they are, put the layer in a workflow that runs
+`on: workflow_dispatch` with the pull request number as an input: check out
+that pull request, build, then
+
+```yaml
+- uses: igoroctaviano/ainotelayer@main
+  with:
+    dir: build
+    pr: ${{ inputs.pr }}
+    sha: <the pull request's head commit>
+```
+
+deploy to a channel of its own, and run `ainotelayer/summary` with the same
+`pr`. Notes belong to the pull request, so running it again after new pushes
+gives a fresh preview with the same notes. GitHub only offers manually run
+workflows that exist on the default branch.
+
 ## Handing notes to an agent
 
 Every build that has the layer serves `/__ainotelayer/agent.md`. Give that URL

@@ -19,21 +19,29 @@ import {
   readHidden,
   summaryBody,
 } from '../github-notes.mjs'
-import { describePullRequest } from '../pr-info.mjs'
+import { describePullRequest, pickPullRequest } from '../pr-info.mjs'
 
 test('a pull request is described by its head commit and branch, and forks are told apart', () => {
   const own = {
+    number: 7,
     state: 'open',
     body: 'dmv-branch: x',
     head: { sha: 'abc', ref: 'feat/x', repo: { full_name: 'o/r' } },
     base: { repo: { full_name: 'o/r' } },
   }
-  assert.deepEqual(describePullRequest(own), { sha: 'abc', ref: 'feat/x', fork: false, state: 'open', body: 'dmv-branch: x' })
+  assert.deepEqual(describePullRequest(own), { number: 7, sha: 'abc', ref: 'feat/x', fork: false, state: 'open', body: 'dmv-branch: x' })
   const forked = { ...own, body: null, head: { ...own.head, repo: { full_name: 'someone/r' } } }
   assert.equal(describePullRequest(forked).fork, true)
   assert.equal(describePullRequest(forked).body, '')
   /** A fork that was deleted leaves no repository behind: still not ours */
   assert.equal(describePullRequest({ ...own, head: { ...own.head, repo: null } }).fork, true)
+})
+
+test('a branch stands for its one open pull request, or says why it cannot', () => {
+  const first = { number: 7 }
+  assert.equal(pickPullRequest([first], 'feat/x'), first)
+  assert.throws(() => pickPullRequest([], 'master'), /No open pull request found for branch "master"/)
+  assert.throws(() => pickPullRequest([first, { number: 9 }], 'feat/x'), /more than one open pull request \(#7, #9\)/)
 })
 
 const fixture = JSON.parse(

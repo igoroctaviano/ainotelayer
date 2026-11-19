@@ -1,13 +1,19 @@
 name: ainotelayer pull request lookup
 description: >
-  For workflows that are started by hand with a pull request number: finds the
-  commit to check out and the branch name, and refuses pull requests from
-  forks, whose code would otherwise run next to the repository's secrets.
+  For workflows that are started by hand: finds the pull request to build,
+  from its number or from the branch the run was started from, with the commit
+  to check out and the branch name. Refuses pull requests from forks, whose
+  code would otherwise run next to the repository's secrets.
 
 inputs:
   pr:
-    description: Pull request number
-    required: true
+    description: Pull request number. Leave empty to use the open pull request of `branch`.
+    default: ''
+  branch:
+    description: >
+      Branch whose open pull request is used when `pr` is empty. By default
+      the branch the workflow was started from ("Use workflow from").
+    default: ${{ github.ref_name }}
   allow-forks:
     description: Set to true to build pull requests from forks too. Only when no secret is in reach of the build.
     default: 'false'
@@ -16,6 +22,9 @@ inputs:
     default: ${{ github.token }}
 
 outputs:
+  number:
+    description: The pull request's number, also when it was found from the branch
+    value: ${{ steps.info.outputs.number }}
   sha:
     description: The pull request's head commit, for actions/checkout's `ref`
     value: ${{ steps.info.outputs.sha }}
@@ -34,10 +43,15 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         LOOKUP_PR: ${{ inputs.pr }}
+        LOOKUP_BRANCH: ${{ inputs.branch }}
         LOOKUP_FORKS: ${{ inputs.allow-forks }}
       run: |
         forks=()
         if [ "$LOOKUP_FORKS" = "true" ]; then
           forks=(--allow-forks)
         fi
-        node "$GITHUB_ACTION_PATH/../pr-info.mjs" --pr "$LOOKUP_PR" "${forks[@]}"
+        which=(--branch "$LOOKUP_BRANCH")
+        if [ -n "$LOOKUP_PR" ]; then
+          which=(--pr "$LOOKUP_PR")
+        fi
+        node "$GITHUB_ACTION_PATH/../pr-info.mjs" "${which[@]}" "${forks[@]}"

@@ -126,6 +126,12 @@
     .hl { position: fixed; display: none; pointer-events: none; border: 2px solid var(--c); border-radius: 6px;
       background: color-mix(in srgb, var(--c) 16%, transparent); }
     .hl.big { background: none; }
+    .lead { position: fixed; display: none; height: 2px; border-radius: 1px; pointer-events: none;
+      background: var(--c); box-shadow: 0 0 0 1px #0b0d10; transform-origin: 0 50%; }
+    .spot { position: fixed; display: none; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%;
+      pointer-events: none; border: 2px solid var(--c); box-shadow: 0 0 0 1px #0b0d10, inset 0 0 0 1px #0b0d10; }
+    .spot::after { content: ''; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+      border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1px #0b0d10; }
     .card { position: fixed; width: 330px; max-height: min(72vh, 580px); overflow: auto; pointer-events: auto;
       background: #14171c; color: #e8eaed; border: 1px solid #2c313a; border-top: 3px solid var(--c, #6ea8fe);
       border-radius: 10px; box-shadow: 0 14px 36px rgba(0,0,0,.6); font-size: 13px; line-height: 1.45; padding: 10px 12px; }
@@ -195,6 +201,8 @@
     .empty { color: #9aa4b2; padding: 8px 0; }
   `
   const highlight = h('div', { class: 'hl' })
+  const lead = h('div', { class: 'lead' })
+  const spot = h('div', { class: 'spot' })
   const pinLayer = h('div', { class: 'pins' })
   const ui = h('div', { class: 'ui' })
   /** The floating notes list: a pill that opens the list; drag either to move it */
@@ -234,7 +242,7 @@
     }
   }
   ui.append(floater, banner, notice)
-  root.append(style, highlight, pinLayer, ui)
+  root.append(style, highlight, pinLayer, lead, spot, ui)
 
   /**
    * Keep the overlay's own events away from the app: its shortcuts, and the
@@ -1632,6 +1640,32 @@
     node.style.top = `${Math.max(8, Math.min(top, window.innerHeight - height - 8))}px`
   }
 
+  /**
+   * A line from the open note to the exact point it is pinned on, ending in a
+   * small ring. The note sits a little away from the point and the highlight
+   * frames the whole element, so neither says where on the element it was.
+   */
+  function pointAt(node, point, color) {
+    if (node === null || point === null) {
+      lead.style.display = 'none'
+      spot.style.display = 'none'
+      return
+    }
+    const box = node.getBoundingClientRect()
+    /** Start inside the note's rounded corner: the note covers that end of the line */
+    const inset = 10
+    const startX = Math.max(box.left + inset, Math.min(point.x, box.right - inset))
+    const startY = Math.max(box.top + inset, Math.min(point.y, box.bottom - inset))
+    /** Stop at the ring, so the point itself stays uncovered */
+    const length = Math.hypot(point.x - startX, point.y - startY) - 7
+    const angle = Math.atan2(point.y - startY, point.x - startX)
+    spot.style.cssText = `display:block;left:${point.x}px;top:${point.y}px;--c:${color}`
+    lead.style.cssText =
+      length < 4
+        ? 'display:none'
+        : `display:block;left:${startX}px;top:${startY - 1}px;width:${length}px;rotate:${angle}rad;--c:${color}`
+  }
+
   function renderPins() {
     const keep = new Set()
     for (const note of state.notes) {
@@ -1680,6 +1714,11 @@
     let target = composer !== null ? composer.element : null
     let color = STATUS.open[1]
     let cardPinned = false
+    let point = null
+    if (composer !== null && composer.element.isConnected) {
+      const rect = composer.element.getBoundingClientRect()
+      point = { x: rect.left + rect.width * composer.at.x, y: rect.top + rect.height * composer.at.y }
+    }
     for (const note of state.notes) {
       const pin = pins.get(note.id)
       if (pin === undefined) {
@@ -1707,6 +1746,7 @@
         target = pin.element
         color = STATUS[note.status][1]
         cardPinned = true
+        point = { x, y }
         place(card.node, x, y)
       }
     }
@@ -1722,6 +1762,7 @@
       card.node.style.left = `${window.innerWidth - card.node.offsetWidth - 12}px`
       card.node.style.top = '64px'
     }
+    pointAt(cardPinned ? card.node : (composer?.node ?? null), point, color)
     if (target !== null && target.isConnected) {
       const rect = target.getBoundingClientRect()
       const big = rect.width * rect.height > 0.2 * window.innerWidth * window.innerHeight
@@ -2155,7 +2196,14 @@
         h('button', { class: 'primary', onclick: save }, 'Add note'),
       ),
     )
-    composer = { node, text, element: meaningful(hit) }
+    const element = meaningful(hit)
+    const box = element.getBoundingClientRect()
+    /** Where on the element the click was, so the pointer follows it when the page scrolls */
+    const at = {
+      x: (event.clientX - box.left) / (box.width || 1),
+      y: (event.clientY - box.top) / (box.height || 1),
+    }
+    composer = { node, text, element, at }
     ui.append(node)
     place(node, event.clientX, event.clientY)
     text.focus()

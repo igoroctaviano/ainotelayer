@@ -242,7 +242,7 @@
     }
   }
   ui.append(floater, banner, notice)
-  root.append(style, highlight, pinLayer, lead, spot, ui)
+  root.append(style, highlight, lead, spot, pinLayer, ui)
 
   /**
    * Keep the overlay's own events away from the app: its shortcuts, and the
@@ -1641,11 +1641,13 @@
   }
 
   /**
-   * A line from the open note to the exact point it is pinned on, ending in a
-   * small ring. The note sits a little away from the point and the highlight
-   * frames the whole element, so neither says where on the element it was.
+   * A line from the open note to the exact point it is pinned on. The note
+   * sits a little away from the point and the highlight frames the whole
+   * element, so neither says where on the element it was. A saved note has a
+   * pin whose tip is on the point, so the line ends there, behind the pin. A
+   * new note has no pin yet: `ring` draws a small ring on the point instead.
    */
-  function pointAt(node, point, color) {
+  function pointAt(node, point, color, ring) {
     if (node === null || point === null) {
       lead.style.display = 'none'
       spot.style.display = 'none'
@@ -1657,9 +1659,9 @@
     const startX = Math.max(box.left + inset, Math.min(point.x, box.right - inset))
     const startY = Math.max(box.top + inset, Math.min(point.y, box.bottom - inset))
     /** Stop at the ring, so the point itself stays uncovered */
-    const length = Math.hypot(point.x - startX, point.y - startY) - 7
+    const length = Math.hypot(point.x - startX, point.y - startY) - (ring ? 7 : 0)
     const angle = Math.atan2(point.y - startY, point.x - startX)
-    spot.style.cssText = `display:block;left:${point.x}px;top:${point.y}px;--c:${color}`
+    spot.style.cssText = ring ? `display:block;left:${point.x}px;top:${point.y}px;--c:${color}` : 'display:none'
     lead.style.cssText =
       length < 4
         ? 'display:none'
@@ -1762,7 +1764,7 @@
       card.node.style.left = `${window.innerWidth - card.node.offsetWidth - 12}px`
       card.node.style.top = '64px'
     }
-    pointAt(cardPinned ? card.node : (composer?.node ?? null), point, color)
+    pointAt(cardPinned ? card.node : (composer?.node ?? null), point, color, !cardPinned)
     if (target !== null && target.isConnected) {
       const rect = target.getBoundingClientRect()
       const big = rect.width * rect.height > 0.2 * window.innerWidth * window.innerHeight

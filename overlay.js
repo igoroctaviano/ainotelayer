@@ -243,9 +243,38 @@
    */
   for (const type of [
     'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu',
-    'focusin', 'focusout', 'keydown', 'keyup', 'keypress', 'wheel', 'input', 'change',
+    'keydown', 'keyup', 'keypress', 'wheel', 'input', 'change',
   ]) {
     host.addEventListener(type, (event) => event.stopPropagation())
+  }
+
+  /**
+   * A modal dialog in the app usually keeps the keyboard inside itself: the
+   * moment focus leaves for anything else it takes it back, and nothing could
+   * be typed in a note written over the dialog. So the app is not told when
+   * focus moves into the overlay or around inside it. The listeners are on
+   * the window, ahead of any the app has on the document. Whatever had focus
+   * gets it back when the note or composer closes.
+   */
+  let focusBefore = null
+  for (const type of ['focusin', 'focusout']) {
+    window.addEventListener(type, (event) => {
+      if (isOurs(event)) {
+        event.stopImmediatePropagation()
+      } else if (type === 'focusout' && event.relatedTarget === host) {
+        focusBefore = event.target
+        event.stopImmediatePropagation()
+      } else if (type === 'focusin') {
+        focusBefore = null
+      }
+    }, true)
+  }
+
+  function handFocusBack(node) {
+    const active = root.activeElement
+    if (active !== null && node.contains(active) && focusBefore instanceof HTMLElement && focusBefore.isConnected) {
+      focusBefore.focus({ preventScroll: true })
+    }
   }
   document.documentElement.append(host)
 
@@ -1523,13 +1552,21 @@
       pushTrail(step('wheel', meaningful(event.target), { direction: event.deltaY < 0 ? 'in' : 'out' }))
     }
   }, { capture: true, passive: true })
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && picking !== null) {
-      stopPicking()
-    }
-    if (event.key === 'Escape' && (card !== null || composer !== null)) {
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && (picking !== null || card !== null || composer !== null)) {
+      /**
+       * Escape closes what the overlay has open and stops there. Passed on,
+       * it would also close the app's dialog underneath, and with it the
+       * element the note is about. On the window, so the app's own Escape
+       * handlers come after this one.
+       */
+      if (picking !== null) {
+        stopPicking()
+      }
       closeCard()
       closeComposer()
+      event.stopImmediatePropagation()
+      return
     }
     if (skipped(event) || ['Shift', 'Alt', 'Control', 'Meta'].includes(event.key)) {
       return
@@ -1634,6 +1671,11 @@
     const slow = now - lastSlow > 300
     if (slow) {
       lastSlow = now
+    }
+    if (location.pathname !== lastPath) {
+      const from = lastPath
+      lastPath = location.pathname
+      leftPage(from)
     }
     let target = composer !== null ? composer.element : null
     let color = STATUS.open[1]
@@ -1801,6 +1843,7 @@
 
   function closeCard() {
     if (card !== null) {
+      handFocusBack(card.node)
       card.node.remove()
       card = null
       renderPins()
@@ -1809,8 +1852,25 @@
 
   function closeComposer() {
     if (composer !== null) {
+      handFocusBack(composer.node)
       composer.node.remove()
       composer = null
+    }
+  }
+
+  /**
+   * The app went to another page without a reload. A note that belonged to
+   * the page just left has nothing to point at any more, so it closes, and so
+   * does a new note nothing was typed in. Typed text is never thrown away.
+   */
+  let lastPath = location.pathname
+  function leftPage(from) {
+    if (composer !== null && composer.text.value.trim() === '') {
+      closeComposer()
+    }
+    const note = card === null ? undefined : state.notes.find((item) => item.id === card.id)
+    if (note !== undefined && note.path === from && !onThisPage(note) && card.reply.value.trim() === '') {
+      closeCard()
     }
   }
 
@@ -1941,6 +2001,7 @@
     card = {
       id,
       node,
+      reply,
       mode: null,
       /**
        * found: nothing to say; moved: offer to update the note; away: offer to
@@ -2094,7 +2155,7 @@
         h('button', { class: 'primary', onclick: save }, 'Add note'),
       ),
     )
-    composer = { node, element: meaningful(hit) }
+    composer = { node, text, element: meaningful(hit) }
     ui.append(node)
     place(node, event.clientX, event.clientY)
     text.focus()

@@ -1131,6 +1131,75 @@
   }
 
   /**
+   * What the reviewer pressed to bring up each dialog or menu. A dialog opened
+   * from a menu item leaves nothing in the page that says so once the menu
+   * has closed, so the press is remembered as it happens.
+   */
+  const LAYER = '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]'
+  const openedWith = new WeakMap()
+
+  function describeOpener(control) {
+    /** Whatever the control itself sits inside has to be opened first, outermost first */
+    const via = containersOf(control)
+      .reverse()
+      .map((container) => container.openedBy)
+      .filter(Boolean)
+      .flatMap((opener) => [...list(opener.via), { ...opener, via: undefined }])
+      .slice(-6)
+    return {
+      label: labelOf(control),
+      selector: cssOf(control),
+      xpath: xpathOf(control),
+      /** Not a control that only shows or hides something: going to a note asks before pressing it */
+      ask: control.matches(TOGGLER) ? undefined : true,
+      via: via.length > 0 ? via : undefined,
+    }
+  }
+
+  /** Call before a press. The function it returns credits that press with every layer that appeared since. */
+  function watchLayers(opener) {
+    const before = new Set(document.querySelectorAll(LAYER))
+    return () => {
+      for (const layer of document.querySelectorAll(LAYER)) {
+        if (!before.has(layer) && !openedWith.has(layer)) {
+          openedWith.set(layer, opener)
+        }
+      }
+    }
+  }
+
+  function layerLabel(node) {
+    const labelledBy = node.getAttribute('aria-labelledby')
+    const labelElement = labelledBy ? document.getElementById(labelledBy.split(' ')[0]) : null
+    return node.getAttribute('aria-label') || (labelElement ? labelOf(labelElement) : '')
+  }
+
+  /** The steps that open a container, outermost first */
+  function openerChain(opener) {
+    return [...list(opener.via), opener]
+  }
+
+  function openerPath(opener) {
+    return openerChain(opener).map((step) => step.label).join(' → ')
+  }
+
+  /** The outermost dialog a note is inside that is not open right now */
+  function closedDialog(note) {
+    const open = [...document.querySelectorAll(LAYER)]
+    return (
+      [...note.anchor.containers]
+        .reverse()
+        .find(
+          (container) =>
+            ['dialog', 'alertdialog'].includes(container.role) &&
+            !open.some(
+              (node) => node.getAttribute('role') === container.role && layerLabel(node) === (container.label ?? ''),
+            ),
+        ) ?? null
+    )
+  }
+
+  /**
    * What the element sits inside at runtime: dialogs, menus, tab panels, open
    * collapsibles. For each one, the control that opens it, so the state can be
    * reached again after it has closed.
@@ -1180,7 +1249,7 @@
         selector: cssOf(node),
         openedBy:
           opener === null
-            ? undefined
+            ? openedWith.get(node)
             : { label: labelOf(opener), selector: cssOf(opener), xpath: xpathOf(opener) },
       })
     }
@@ -1523,8 +1592,23 @@
   let pressed = null
   let lastHref = location.href
 
+  /** Remember which press brings up a dialog or menu; checked again as the app reacts */
+  let settleLayers = null
+  function watchPress(event) {
+    if (skipped(event) || !(event.target instanceof Element)) {
+      return
+    }
+    const settle = watchLayers(describeOpener(meaningful(event.target)))
+    settleLayers = settle
+    setTimeout(settle, 150)
+    setTimeout(settle, 600)
+  }
+
   document.addEventListener('pointerdown', (event) => {
     pressed = skipped(event) ? null : { x: event.clientX, y: event.clientY, target: event.target }
+    if (event.button === 0) {
+      watchPress(event)
+    }
   }, true)
   document.addEventListener('pointerup', (event) => {
     if (pressed === null || skipped(event) || !(pressed.target instanceof Element)) {
@@ -1540,6 +1624,11 @@
   document.addEventListener('click', (event) => {
     if (!skipped(event) && event.target instanceof Element) {
       pushTrail(step('click', meaningful(event.target)))
+      if (settleLayers !== null) {
+        setTimeout(settleLayers, 0)
+        setTimeout(settleLayers, 150)
+        setTimeout(settleLayers, 600)
+      }
     }
   }, true)
   document.addEventListener('change', (event) => {
@@ -1578,6 +1667,9 @@
     }
     if (skipped(event) || ['Shift', 'Alt', 'Control', 'Meta'].includes(event.key)) {
       return
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      watchPress(event)
     }
     const plain = !event.altKey && !event.ctrlKey && !event.metaKey
     if (plain && event.key.length === 1 && isTyping(event.target)) {
@@ -1787,7 +1879,7 @@
     }
     for (const container of anchor.containers) {
       const label = container.label ? ` “${container.label}”` : ''
-      const opener = container.openedBy ? `, opened by “${container.openedBy.label}”` : ''
+      const opener = container.openedBy ? `, opened by “${openerPath(container.openedBy)}”` : ''
       line.append(` · inside ${container.role}${label}${opener}`)
     }
     return line
@@ -1849,7 +1941,7 @@
       lines.push(`components: ${anchor.components.join(' < ')}`)
     }
     for (const container of anchor.containers) {
-      const opener = container.openedBy ? ` (opened by "${container.openedBy.label}")` : ''
+      const opener = container.openedBy ? ` (opened by "${openerPath(container.openedBy)}")` : ''
       lines.push(`inside: ${container.role} "${container.label ?? ''}"${opener}`)
     }
     if (note.hasShot) {
@@ -2066,10 +2158,22 @@
           hintAction.textContent = 'Update the note'
           hintAction.onclick = () => keepWhereFound(id)
         } else if (mode === 'away') {
-          hintText.textContent =
-            current !== undefined && needsRecheck(current)
-              ? 'This element could not be found on this build. It may have changed or been removed.'
-              : 'This element is not on the screen right now.'
+          const dialog = current !== undefined && onThisPage(current) ? closedDialog(current) : null
+          const name = dialog?.label ? `the “${dialog.label}” dialog` : 'a dialog'
+          if (dialog?.openedBy) {
+            hintText.textContent = `This note is in ${name}, opened with ${openerPath(dialog.openedBy)}.`
+            hintAction.textContent = 'Open it'
+            hintAction.onclick = () => reveal(current, 1500, true, true)
+            return
+          }
+          if (dialog !== null) {
+            hintText.textContent = `This note is in ${name}. Open the dialog and the note will show there.`
+          } else {
+            hintText.textContent =
+              current !== undefined && needsRecheck(current)
+                ? 'This element could not be found on this build. It may have changed or been removed.'
+                : 'This element is not on the screen right now.'
+          }
           hintAction.textContent = 'Re-attach'
           hintAction.onclick = () => startPicking(id)
         }
@@ -2291,6 +2395,35 @@
     return null
   }
 
+  /**
+   * With the reviewer's say-so (they pressed "Open it", next to the names),
+   * a plain button or menu item may be pressed as well, but only one that
+   * carries the name they were shown.
+   */
+  const PRESSABLE = 'button,[role="button"],[role="menuitem"]'
+  function findControl(opener) {
+    const wanted = nameKey(opener.label)
+    if (wanted === '') {
+      return null
+    }
+    const fits = (element) =>
+      element instanceof Element && element.matches(PRESSABLE) && nameKey(labelOf(element)) === wanted
+    try {
+      const matches = document.querySelectorAll(opener.selector)
+      if (matches.length === 1 && fits(matches[0])) {
+        return matches[0]
+      }
+    } catch {
+      /** Fall through to the name */
+    }
+    for (const element of document.querySelectorAll(PRESSABLE)) {
+      if (fits(element) && isShown(element)) {
+        return element
+      }
+    }
+    return null
+  }
+
   function isOpen(opener) {
     return (
       opener.getAttribute('aria-expanded') === 'true' ||
@@ -2325,7 +2458,7 @@
    * menu it sits inside (outermost first), scroll it into view, then expand
    * the note on it. `patience` is how long to wait for the app to show things.
    */
-  async function reveal(note, patience = 1500, navigate = true) {
+  async function reveal(note, patience = 1500, navigate = true, consent = false) {
     if (!onThisPage(note) && !navigate) {
       /** Opened from a link or after a page change: show it, let the reviewer choose to go */
       openCard(note.id)
@@ -2356,21 +2489,49 @@
       seeking = note.id
       openCard(note.id)
       pulseUntil = performance.now() + 2500
-      const openers = [...note.anchor.containers]
-        .reverse()
-        .map((container) => container.openedBy)
-        .filter(Boolean)
-      for (const wanted of openers) {
+      const steps = []
+      for (const container of [...note.anchor.containers].reverse()) {
+        if (!container.openedBy) {
+          continue
+        }
+        const chain = openerChain(container.openedBy)
+        if (chain.some((step) => step.ask)) {
+          /**
+           * Opening this takes a press on something that is not a plain
+           * show-or-hide control. Leave it, and what is inside it, until the
+           * reviewer asks: the note says how it opens and offers to do it.
+           */
+          if (closedDialog(note) === null) {
+            continue
+          }
+          if (!consent) {
+            break
+          }
+        }
+        for (const step of chain) {
+          if (!steps.some((done) => done.selector === step.selector && done.label === step.label)) {
+            steps.push(step)
+          }
+        }
+      }
+      for (const wanted of steps) {
         if (found() !== null || card?.id !== note.id) {
           break
         }
-        const opener = await waitFor(() => findOpener(wanted), patience)
+        const opener = await waitFor(
+          () => findOpener(wanted) ?? (consent && wanted.ask ? findControl(wanted) : null),
+          patience,
+        )
         if (opener === null || isOpen(opener)) {
           continue
         }
+        /** A layer this press brings up is remembered too, for a note added inside it next */
+        const settle = watchLayers(wanted)
         opener.scrollIntoView({ block: 'nearest' })
         press(opener)
-        await waitFor(() => isOpen(opener) || found() !== null, 1200)
+        await waitFor(() => isOpen(opener) || !opener.isConnected || found() !== null, 1200)
+        settle()
+        setTimeout(settle, 400)
       }
       element = await waitFor(() => (seeking === note.id && card?.id === note.id ? found() : 'stop'), patience)
       const stopped = element === 'stop'
@@ -2389,7 +2550,9 @@
     /** Remember, per build, that the element could not be found, so the list can say so */
     const build = state.meta.sha ?? null
     const known = note.health?.state === 'missing' && (note.health.sha ?? null) === build
-    if (element === null && document.readyState === 'complete' && !known) {
+    /** Inside a dialog that is closed is not the same as gone from this build */
+    const shut = element === null && closedDialog(note) !== null
+    if (element === null && !shut && document.readyState === 'complete' && !known) {
       const health = { state: 'missing', sha: build, at: new Date().toISOString() }
       rest(`notes/${note.id}`, 'PATCH', { health }).then(refresh).catch(() => {})
     } else if (element !== null && note.health != null) {
@@ -2559,9 +2722,11 @@
     const replies = note.messages.length - 1
     let where = ''
     if (onThisPage(note) && (pin === undefined || !pin.visible)) {
+      /** A closed dialog is the thing to name; otherwise whatever opens the nearest section */
+      const dialog = closedDialog(note)?.label
       const opener = note.anchor.containers.find((container) => container.openedBy)?.openedBy
-      const name = String(opener?.label ?? '').split(' ').slice(0, 2).join(' ')
-      where = opener ? ` · inside “${name}”` : ' · not on screen'
+      const name = dialog || String(opener?.label ?? '').split(' ').slice(0, 2).join(' ')
+      where = name ? ` · inside “${name}”` : ' · not on screen'
     }
     if (needsRecheck(note)) {
       where = ' · needs re-check'
@@ -2823,7 +2988,7 @@
       }
       for (const container of anchor.containers) {
         const label = container.label ? ` "${container.label}"` : ''
-        const opener = container.openedBy ? `, opened by "${container.openedBy.label}"` : ''
+        const opener = container.openedBy ? `, opened by "${openerPath(container.openedBy)}"` : ''
         lines.push(`- Inside: ${container.role}${label}${opener}`)
       }
       if (note.trail.length > 0) {

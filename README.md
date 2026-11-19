@@ -182,21 +182,24 @@ It needs Node 22.18 or newer when the app's Vite config is TypeScript.
 
 ## Only when asked: a manually run preview
 
-To keep ordinary previews as they are, add a manual trigger with the pull
-request number as an input, and run the notes steps only then:
+To keep ordinary previews as they are, add a manual trigger and run the notes
+steps only then. The pull request is the one whose number is typed in, or,
+when that is left empty, the open pull request of the branch the run is
+started from ("Use workflow from"):
 
 ```yaml
 on:
   workflow_dispatch:
     inputs:
       pr:
-        description: Pull request to build a preview with notes for
-        required: true
+        description: Pull request number (empty = the pull request of the branch chosen above)
+        required: false
         type: number
 
 # ...
 steps:
-  # Finds the commit to check out; refuses pull requests from forks.
+  # Finds the pull request and the commit to check out; refuses pull
+  # requests from forks.
   - id: pr
     uses: igoroctaviano/ainotelayer/pull-request@main
     with:
@@ -214,15 +217,21 @@ steps:
   - uses: igoroctaviano/ainotelayer@main
     with:
       dir: build
-      pr: ${{ inputs.pr }}
+      pr: ${{ steps.pr.outputs.number }}
+      branch: ${{ steps.pr.outputs.ref }}
+      sha: ${{ steps.pr.outputs.sha }}
 
   # ... deploy `build` to a channel of its own ...
 
   - uses: igoroctaviano/ainotelayer/summary@main
     with:
-      pr: ${{ inputs.pr }}
+      pr: ${{ steps.pr.outputs.number }}
       preview-url: <the deployed URL>
 ```
+
+Starting a run from a branch uses that branch's copy of the workflow file, so
+the branch has to contain it. Starting it from the default branch with a
+number always works.
 
 These can also be steps in an existing preview workflow, guarded with
 `if: github.event_name == 'workflow_dispatch'`, so the build is not copied.

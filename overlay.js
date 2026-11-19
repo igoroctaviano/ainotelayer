@@ -185,7 +185,8 @@
     .banner { position: fixed; top: 12px; left: 50%; translate: -50% 0; pointer-events: none; background: #f2c94c; color: #0b0d10;
       font-size: 13px; font-weight: 700; padding: 8px 14px; border-radius: 999px; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
     .hint { color: #f2c94c; font-size: 12px; margin-bottom: 8px; }
-    .hl.pulse { animation: pulse .8s ease-out 2; }
+    .banner.quiet { background: #14171c; color: #e8eaed; border: 1px solid #2c313a; font-weight: 600; }
+    .hl.pulse, .pin.pulse, .card.pulse { animation: pulse .8s ease-out 3; }
     @keyframes pulse { from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 75%, transparent); } to { box-shadow: 0 0 0 20px transparent; } }
     .item { display: grid; grid-template-columns: 10px 1fr; gap: 2px 8px; width: 100%; text-align: left; margin-top: 6px; padding: 7px 8px; }
     .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 4px; }
@@ -200,6 +201,8 @@
   let floatAt = null
   let dragged = false
   let pulseUntil = 0
+  /** The note whose element is being waited for, so its card can say so */
+  let seeking = null
   const dock = h(
     'button',
     {
@@ -219,7 +222,18 @@
     { class: 'banner', style: 'display:none' },
     'Click the element this note belongs to. Esc cancels.',
   )
-  ui.append(floater, banner)
+  /** A short message about a note that was asked for, such as one a link names */
+  const notice = h('div', { class: 'banner quiet', style: 'display:none' })
+  let noticeTimer = 0
+  function say(text, forMs = 0) {
+    clearTimeout(noticeTimer)
+    notice.textContent = text
+    notice.style.display = text === '' ? 'none' : ''
+    if (text !== '' && forMs > 0) {
+      noticeTimer = setTimeout(() => say(''), forMs)
+    }
+  }
+  ui.append(floater, banner, notice)
   root.append(style, highlight, pinLayer, ui)
 
   /**
@@ -325,6 +339,12 @@
     const response = await fetch(`${GH_API}${pathname}`, {
       method: options.method ?? 'GET',
       headers,
+      /**
+       * GitHub lets browsers reuse an answer for 60 seconds. A page opened
+       * right after a note was added would then get the list from before it,
+       * so always ask GitHub (it answers "unchanged" cheaply when nothing is new).
+       */
+      cache: 'no-cache',
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     })
     if (response.status === 401 && token !== '') {
@@ -1630,6 +1650,8 @@
         pin.visible = pin.element !== null && visibleAt(pin.element, note.anchor.offset)
         pin.node.classList.toggle('moved', pin.how === 'moved' || pin.how === 'changed')
       }
+      /** The note someone was just taken to stands out among the others for a moment */
+      pin.node.classList.toggle('pulse', now < pulseUntil && card !== null && card.id === note.id)
       if (!pin.visible) {
         pin.node.style.display = 'none'
         continue
@@ -1647,10 +1669,12 @@
       }
     }
     if (card !== null) {
-      const mode = cardPinned ? (pins.get(card.id)?.how ?? 'found') : 'away'
+      const away = seeking === card.id ? 'seeking' : 'away'
+      const mode = cardPinned ? (pins.get(card.id)?.how ?? 'found') : away
       if (card.mode !== mode) {
         card.setMode(mode)
       }
+      card.node.classList.toggle('pulse', now < pulseUntil)
     }
     if (card !== null && !cardPinned) {
       card.node.style.left = `${window.innerWidth - card.node.offsetWidth - 12}px`
@@ -1918,12 +1942,19 @@
       id,
       node,
       mode: null,
-      /** found: nothing to say; moved: offer to update the note; away: offer to re-attach it */
+      /**
+       * found: nothing to say; moved: offer to update the note; away: offer to
+       * re-attach it; seeking: still waiting for the app to show the element
+       */
       setMode(mode) {
         this.mode = mode
         const current = state.notes.find((item) => item.id === id)
         hint.style.display = mode === 'found' ? 'none' : ''
-        if (mode === 'moved' || mode === 'changed') {
+        if (mode === 'seeking') {
+          hintText.textContent = 'Looking for this element on the page…'
+          hintAction.textContent = ''
+          hintAction.onclick = null
+        } else if (mode === 'moved' || mode === 'changed') {
           hintText.textContent =
             mode === 'moved'
               ? 'Recognised by its description: it is not where it was when the note was made.'
@@ -2206,12 +2237,20 @@
     }
     let element = found()
     if (element === null) {
+      /**
+       * The element is not there yet, or not at all on a screen this size.
+       * Show the note now and say it is being looked for: waiting first would
+       * leave the reviewer looking at nothing for the whole wait.
+       */
+      seeking = note.id
+      openCard(note.id)
+      pulseUntil = performance.now() + 2500
       const openers = [...note.anchor.containers]
         .reverse()
         .map((container) => container.openedBy)
         .filter(Boolean)
       for (const wanted of openers) {
-        if (found() !== null) {
+        if (found() !== null || card?.id !== note.id) {
           break
         }
         const opener = await waitFor(() => findOpener(wanted), patience)
@@ -2222,7 +2261,15 @@
         press(opener)
         await waitFor(() => isOpen(opener) || found() !== null, 1200)
       }
-      element = await waitFor(found, patience)
+      element = await waitFor(() => (seeking === note.id && card?.id === note.id ? found() : 'stop'), patience)
+      const stopped = element === 'stop'
+      if (seeking === note.id) {
+        seeking = null
+      }
+      if (stopped) {
+        /** The reviewer closed the note or went to another one meanwhile */
+        return
+      }
     }
     if (element !== null && !visibleAt(element, note.anchor.offset)) {
       element.scrollIntoView({ block: 'center', inline: 'nearest' })
@@ -2237,9 +2284,14 @@
     } else if (element !== null && note.health != null) {
       rest(`notes/${note.id}`, 'PATCH', { health: null }).then(refresh).catch(() => {})
     }
-    openCard(note.id)
+    if (card?.id !== note.id) {
+      openCard(note.id)
+    }
     lastSlow = 0
-    pulseUntil = element === null ? 0 : performance.now() + 1700
+    /** Not found: the note was already shown, and pulsed, when the wait began */
+    if (element !== null) {
+      pulseUntil = performance.now() + 2500
+    }
     /** Once the note is placed, get the list out of the way if it covers it */
     await sleep(60)
     if (panel !== null && card !== null) {
@@ -2744,6 +2796,50 @@
     state.meta = { ...tagMeta, ...(meta ?? {}) }
     renderPins()
   }).catch(() => {})
+  /** A link from the pull request names the note to open: …#ainote=<id> */
+  function linkedNote() {
+    return /[#&]ainote=([\w-]+)/.exec(location.hash)?.[1] ?? null
+  }
+
+  /**
+   * Open the note a link or a page change asked for. A note added moments ago
+   * can be missing from the list GitHub returns, so when it is not there ask
+   * again a few times, and say what is going on instead of showing nothing.
+   */
+  let awaited = null
+  async function openWanted(id) {
+    awaited = id
+    for (const wait of [0, 2500, 5000, 10_000]) {
+      if (wait > 0) {
+        await sleep(wait)
+        if (awaited !== id) {
+          return
+        }
+        await refresh()
+      }
+      const note = state.notes.find((item) => item.id === id)
+      if (awaited !== id) {
+        return
+      }
+      if (note !== undefined) {
+        awaited = null
+        say('')
+        /**
+         * The app may still be starting, so wait longer for it. No page change
+         * from here: a link must not be able to send the reviewer somewhere
+         * else, and a redirect must not cause a loop.
+         */
+        reveal(note, 10_000, false)
+        return
+      }
+      say('Looking for the note…')
+    }
+    awaited = null
+    say('That note was not found. It may have been deleted.', 8000)
+  }
+
+  /** Read now: the app's router may rewrite the address while the notes load */
+  const linkedAtStart = linkedNote()
   refresh().then(() => {
     subscribe()
     let pending = null
@@ -2753,19 +2849,16 @@
     } catch {
       /** Nothing to reopen */
     }
-    /** A link from the pull request names the note to open: …#ainote=<id> */
-    const linked = /[#&]ainote=([\w-]+)/.exec(location.hash)
-    if (pending === null && linked !== null) {
-      pending = linked[1]
+    pending ??= linkedAtStart
+    if (pending !== null) {
+      openWanted(pending)
     }
-    const waiting = state.notes.find((note) => note.id === pending)
-    if (waiting !== undefined) {
-      /**
-       * The app is still starting after the page change, so wait longer for it.
-       * No page change from here: a link must not be able to send the reviewer
-       * somewhere else, and a redirect must not cause a loop.
-       */
-      reveal(waiting, 10_000, false)
+  })
+  /** A second link opened in the same tab only changes the part after the # */
+  window.addEventListener('hashchange', () => {
+    const id = linkedNote()
+    if (id !== null) {
+      openWanted(id)
     }
   })
   if (GITHUB && ghToken() !== '') {

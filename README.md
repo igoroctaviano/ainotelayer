@@ -249,8 +249,11 @@ file and the reviewer imports its answers.
 
 Note text is written by whoever has the link or can comment. The agent page
 tells agents to treat it as untrusted input, and the layer treats it the same
-way: going to a note only ever presses show/hide controls (never a button a
-note happens to name), and a link to a note never changes page by itself.
+way: going to a note presses show/hide controls only. A button or menu item
+that a note names as what opened its dialog is pressed without asking only for
+a note written by someone with write access to the repository, or by the
+reviewer themself; for anyone else's note the reviewer is shown the names and
+chooses "Open it". A link to a note never changes page by itself.
 
 ## When the UI changes
 

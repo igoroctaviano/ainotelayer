@@ -2396,9 +2396,10 @@
   }
 
   /**
-   * With the reviewer's say-so (they pressed "Open it", next to the names),
-   * a plain button or menu item may be pressed as well, but only one that
-   * carries the name they were shown.
+   * A plain button or menu item may be pressed as well, but only one that
+   * carries the name the note recorded, and only when the note can be taken
+   * at its word (see `pressesUnasked`) or the reviewer said so by pressing
+   * "Open it", next to the names.
    */
   const PRESSABLE = 'button,[role="button"],[role="menuitem"]'
   function findControl(opener) {
@@ -2422,6 +2423,19 @@
       }
     }
     return null
+  }
+
+  /**
+   * Whether going to this note may press the buttons and menu items it names
+   * without asking first. What a note says opened its dialog is only as good
+   * as whoever wrote the note, and on a public pull request that is anyone
+   * able to comment. So: notes by people with write access to the repository
+   * (who could change the app itself), and the reviewer's own. For any other
+   * note, and with a shared database, where nothing says who wrote a note,
+   * the reviewer is asked.
+   */
+  function pressesUnasked(note) {
+    return GITHUB && (note.trusted === true || (gh.login !== '' && note.author === gh.login))
   }
 
   function isOpen(opener) {
@@ -2475,6 +2489,7 @@
       return
     }
     closeComposer()
+    const free = consent || pressesUnasked(note)
     const found = () => {
       const element = locate(note.anchor)?.element ?? null
       return element !== null && isShown(element) ? element : null
@@ -2498,13 +2513,14 @@
         if (chain.some((step) => step.ask)) {
           /**
            * Opening this takes a press on something that is not a plain
-           * show-or-hide control. Leave it, and what is inside it, until the
-           * reviewer asks: the note says how it opens and offers to do it.
+           * show-or-hide control. Unless the note may do that unasked, leave
+           * it, and what is inside it, until the reviewer asks: the note says
+           * how it opens and offers to do it.
            */
           if (closedDialog(note) === null) {
             continue
           }
-          if (!consent) {
+          if (!free) {
             break
           }
         }
@@ -2519,7 +2535,7 @@
           break
         }
         const opener = await waitFor(
-          () => findOpener(wanted) ?? (consent && wanted.ask ? findControl(wanted) : null),
+          () => findOpener(wanted) ?? (free && wanted.ask ? findControl(wanted) : null),
           patience,
         )
         if (opener === null || isOpen(opener)) {

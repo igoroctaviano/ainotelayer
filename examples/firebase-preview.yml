@@ -3,9 +3,11 @@
 #
 # Needs, once per Firebase project:
 #   - repo secret FIREBASE_SERVICE_ACCOUNT, for the hosting deploy
-#   - to share notes between reviewers: a Realtime Database with
-#     database.rules.json deployed, repo variable REVIEW_DATABASE_URL and repo
-#     secret REVIEW_SALT. Without them notes stay in each reviewer's browser.
+#
+# Notes are kept as comments on the pull request, so nothing else is needed.
+# To keep them in a Realtime Database instead: deploy database.rules.json to
+# the Firebase project and set repo variable REVIEW_DATABASE_URL and repo
+# secret REVIEW_SALT. A database, when set, wins over the pull request.
 #
 # For notes that name the source file and line, add the build plugin to the
 # app's bundler config once (see vite.mjs or webpack.cjs); AINOTELAYER=1 below

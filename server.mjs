@@ -35,6 +35,12 @@ function arg(name, fallback) {
 }
 
 const target = new URL(arg('target', 'http://localhost:3100'))
+if (target.protocol !== 'http:') {
+  console.error(`ainotelayer: --target must be an http:// address (a dev server or a local preview), not ${target.protocol}//`)
+  process.exit(1)
+}
+/** A target without a port in its address is on the default one */
+const targetPort = Number(target.port) || 80
 const port = Number(arg('port', 3200))
 const repo = path.resolve(arg('repo', process.cwd()))
 const storeDir = path.resolve(arg('store', path.join(here, 'notes')))
@@ -86,6 +92,12 @@ function meta() {
 
 /** --- A small JSON tree with Realtime Database semantics ------------------- */
 
+/**
+ * Keys that mean something to every object. A path or a body that names one
+ * would write to the object's prototype instead of the notes.
+ */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
 /** Nulls and empty containers do not exist in the database */
 function prune(value) {
   if (value === null || value === undefined) {
@@ -98,7 +110,7 @@ function prune(value) {
   if (typeof value === 'object') {
     const result = {}
     for (const [key, child] of Object.entries(value)) {
-      const kept = prune(child)
+      const kept = UNSAFE_KEYS.has(key) ? null : prune(child)
       if (kept !== null) {
         result[key] = kept
       }
@@ -226,9 +238,13 @@ async function database(request, response, url) {
   }
   const review = match[1]
   const segments = match[2].split('/').filter(Boolean).map(decodeURIComponent)
-  let tree = loadTree(review)
+  if (segments.some((segment) => UNSAFE_KEYS.has(segment))) {
+    json(response, 400, { error: 'This path cannot be used' })
+    return
+  }
 
   if (request.method === 'GET') {
+    const tree = loadTree(review)
     if (String(request.headers.accept ?? '').includes('text/event-stream')) {
       response.writeHead(200, {
         ...CORS,
@@ -250,7 +266,13 @@ async function database(request, response, url) {
     return
   }
 
+  /**
+   * The file is read after the whole body has arrived, and written back
+   * without waiting for anything in between: two writes at the same moment
+   * then follow each other instead of one undoing the other.
+   */
   const body = await readJson(request)
+  let tree = loadTree(review)
   if (request.method === 'PUT') {
     tree = setAt(tree, segments, body)
     saveTree(review, tree)
@@ -263,8 +285,13 @@ async function database(request, response, url) {
       json(response, 400, { error: 'PATCH needs an object' })
       return
     }
-    for (const [key, value] of Object.entries(body)) {
-      tree = setAt(tree, [...segments, ...key.split('/').filter(Boolean)], value)
+    const changes = Object.entries(body).map(([key, value]) => [key.split('/').filter(Boolean), value])
+    if (changes.some(([keys]) => keys.some((key) => UNSAFE_KEYS.has(key)))) {
+      json(response, 400, { error: 'This path cannot be used' })
+      return
+    }
+    for (const [keys, value] of changes) {
+      tree = setAt(tree, [...segments, ...keys], value)
     }
     saveTree(review, tree)
     notify(review, segments, 'patch', body, tree)
@@ -296,7 +323,7 @@ function origin(request) {
 }
 
 function attribute(value) {
-  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 /** The repository whose pull request holds the notes, when --pr is given */
@@ -495,7 +522,9 @@ function serveOwn(request, response, url) {
       pullRequest !== '' && repository !== ''
         ? { repo: repository, pr: pullRequest, api: mockGithub ? `${origin(request)}${MOCK}` : undefined }
         : undefined
-    response.end(agentGuide({ db: `${origin(request)}${DB}`, review: info.review, meta: info, github }))
+    /** With --pr the notes are on the pull request, and the page must say so, not point at the local files */
+    const db = github === undefined ? `${origin(request)}${DB}` : ''
+    response.end(agentGuide({ db, review: info.review, meta: info, github }))
     return
   }
   json(response, 404, { error: 'Not found' })
@@ -508,7 +537,7 @@ function proxy(request, response) {
   const upstream = http.request(
     {
       hostname: target.hostname,
-      port: target.port,
+      port: targetPort,
       path: request.url,
       method: request.method,
       headers,
@@ -527,12 +556,22 @@ function proxy(request, response) {
         recordMeta(info)
         const tag = overlayTag(info)
         const html = Buffer.concat(chunks).toString('utf8')
+        /** A function, so that a "$&" in the build info is not read as a pattern */
         const injected = html.includes('</head>')
-          ? html.replace('</head>', `${tag}</head>`)
+          ? html.replace('</head>', () => `${tag}</head>`)
           : `${html}${tag}`
         const replyHeaders = { ...reply.headers }
         delete replyHeaders['content-encoding']
         delete replyHeaders['transfer-encoding']
+        /**
+         * The page carries the review id and the build info, which change
+         * with the branch. Left to the app's own caching headers, the browser
+         * would ask "still the same?", the app would say yes, and the page
+         * would keep the tag of the branch it was first loaded on.
+         */
+        delete replyHeaders.etag
+        delete replyHeaders['last-modified']
+        replyHeaders['cache-control'] = 'no-store'
         replyHeaders['content-length'] = Buffer.byteLength(injected)
         response.writeHead(reply.statusCode ?? 200, replyHeaders)
         response.end(injected)
@@ -579,7 +618,7 @@ const server = http.createServer((request, response) => {
 
 /** Pass WebSocket upgrades through so the dev server's hot reload keeps working */
 server.on('upgrade', (request, socket, head) => {
-  const upstream = net.connect(Number(target.port), target.hostname, () => {
+  const upstream = net.connect(targetPort, target.hostname, () => {
     const lines = [`${request.method} ${request.url} HTTP/1.1`]
     for (let index = 0; index < request.rawHeaders.length; index += 2) {
       const key = request.rawHeaders[index]

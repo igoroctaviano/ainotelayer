@@ -46,7 +46,7 @@ function fail(message) {
 }
 
 function attribute(value) {
-  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 function htmlFiles(directory) {
@@ -111,10 +111,11 @@ let pages = 0
 for (const file of htmlFiles(dir)) {
   const html = fs.readFileSync(file, 'utf8')
   let next
+  /** Functions, so that a "$&" in the build info is not read as a pattern */
   if (existing.test(html)) {
-    next = html.replace(existing, tag)
+    next = html.replace(existing, () => tag)
   } else if (html.includes('</head>')) {
-    next = html.replace('</head>', `${tag}</head>`)
+    next = html.replace('</head>', () => `${tag}</head>`)
   } else {
     continue
   }

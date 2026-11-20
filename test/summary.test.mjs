@@ -104,6 +104,31 @@ test('a stranger cannot move a maintainer\'s note, and is told why', () => {
   assert.match(said[1], /^Status: Resolved \(not applied: only collaborators/)
 })
 
+test('a stranger cannot take a maintainer\'s note out of the count by claiming its id', () => {
+  const takeover = scenario('an older comment edited into a note')
+  const notes = foldNotes(takeover.comments)
+  assert.equal(notes[0].text, 'From a maintainer')
+  assert.equal(notes[0].trusted, true)
+  assert.deepEqual(countNotes(notes), { open: 1, fix: 0, resolved: 0, outside: 1, total: 1, unresolved: 1 })
+})
+
+test('only plain note ids and pictures that are data URLs are taken from a comment', () => {
+  const body = (id, extra = {}) => `x\n\n${hiddenBlock('note', { id, text: 't', anchor: { tag: 'div' }, ...extra })}`
+  const comment = (id, text) => ({ id, user: { login: 'igor' }, author_association: 'OWNER', created_at: `2026-11-17T10:0${id}:00Z`, html_url: 'u', body: text })
+  const { notes, shots } = globalThis.ainotelayerFormat.fold([
+    comment(1, body('plain-1')),
+    comment(2, body('a/messages')),
+    comment(3, body('__proto__')),
+    comment(4, body('')),
+    comment(5, body('remote', { shot: 'https://elsewhere.example/p.png' })),
+    comment(6, body('drawn', { shot: 'data:image/webp;base64,AAAA' })),
+  ])
+  assert.deepEqual(Object.keys(notes), ['plain-1', 'remote', 'drawn'])
+  assert.equal(Object.getPrototypeOf(notes), Object.prototype)
+  assert.equal(notes.remote.hasShot, false)
+  assert.deepEqual(shots, { drawn: 'data:image/webp;base64,AAAA' })
+})
+
 test('counts leave strangers\' notes out, and their wording', () => {
   assert.deepEqual(countNotes(foldNotes(typical.comments)), { open: 2, fix: 0, resolved: 1, outside: 0, total: 3, unresolved: 2 })
   assert.deepEqual(countNotes(foldNotes(strangers.comments)), { open: 1, fix: 0, resolved: 0, outside: 1, total: 1, unresolved: 1 })
@@ -153,7 +178,7 @@ test('only a bot\'s or a collaborator\'s overview comment is ours', () => {
 })
 
 test('note text cannot break the overview or smuggle in links, mentions or HTML', () => {
-  const nasty = '</details> <!-- [Open](https://evil.example) ![x](y) @org/everyone | `code` *bold*\nnew line'
+  const nasty = '</details> <!-- [Open](https://evil.example) ![x](y) @org/everyone www.evil.example | `code` *bold*\nnew line'
   const body = summaryBody([
     { id: 'a', n: 1, kind: 'Change', text: nasty, element: 'div <b>', source: 'a`b.tsx:1', author: 'x', trusted: true, status: 'open', replies: 0, url: 'u', lastAt: '2026-11-17T10:00:00Z', lastBy: 'x' },
   ])
@@ -164,6 +189,7 @@ test('note text cannot break the overview or smuggle in links, mentions or HTML'
   assert.equal(/(?<!\\)\[Open\]\(/.test(row), false)
   assert.equal(row.includes('://evil'), false)
   assert.equal(row.includes('@org'), false)
+  assert.equal(row.includes('www.evil'), false)
   assert.equal(/(?<!\\)\|/.test(row.slice(1, -1).replace(/ \| /g, '')), false)
   assert.equal(row.includes('\n'), false)
   /** Seven cell borders: nothing in the text added or removed a column */

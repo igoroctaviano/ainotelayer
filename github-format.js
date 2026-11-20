@@ -51,6 +51,20 @@
     return value !== null && typeof value === 'object' ? Object.values(value) : []
   }
 
+  /**
+   * A note's id is used as a key and as part of a path, and it comes from a
+   * comment anyone may have written. Only plain ids count, and none that
+   * means something to an object.
+   */
+  function isId(value) {
+    return typeof value === 'string' && /^[\w-]{1,64}$/.test(value) && !['__proto__', 'constructor', 'prototype'].includes(value)
+  }
+
+  /** A note's picture is drawn by the overlay: an image as a data URL, never an address to fetch */
+  function isShot(value) {
+    return typeof value === 'string' && value.startsWith('data:image/')
+  }
+
   function isStatus(value) {
     return typeof value === 'string' && Object.hasOwn(STATUS, value)
   }
@@ -136,7 +150,9 @@
    * so deleting an earlier note does not shift the later ones and "N3:" keeps
    * meaning the same note. Notes from before numbers were stored take the
    * lowest free numbers in order; if two notes claim one number (created at
-   * the same moment), the later one moves past the highest.
+   * the same moment), the later one moves past the highest. A collaborator's
+   * note is served first, so someone outside the repository cannot take a
+   * number away from it.
    */
   function numberNotes(found) {
     const taken = new Set()
@@ -145,7 +161,8 @@
     for (const item of found) {
       highest = Math.max(highest, stored(item) ?? 0)
     }
-    for (const item of found) {
+    const collaboratorsFirst = [...found].sort((a, b) => Number(b.trusted) - Number(a.trusted))
+    for (const item of collaboratorsFirst) {
       const number = stored(item)
       if (number !== undefined && !taken.has(number)) {
         item.n = number
@@ -183,25 +200,35 @@
     const ordered = [...comments].sort(
       (a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id,
     )
-    const found = []
-    const seen = new Set()
+    /**
+     * One comment per note id. The oldest comment that claims an id has it,
+     * except that a collaborator's comment wins over one from outside the
+     * repository: an old comment can be edited into a note later, and that
+     * must not replace a collaborator's note or take it out of the count.
+     */
+    const claims = new Map()
     ordered.forEach((comment, index) => {
       const hidden = readHidden(comment.body)
       const id = hidden !== null && hidden.kind === 'note' ? hidden.data?.id : undefined
-      if (typeof id === 'string' && id !== '' && !seen.has(id)) {
-        seen.add(id)
-        found.push({ comment, index, data: hidden.data })
+      if (!isId(id)) {
+        return
+      }
+      const claim = { comment, index, data: hidden.data, trusted: everyone || isCollaborator(comment) }
+      const held = claims.get(id)
+      if (held === undefined || (claim.trusted && !held.trusted)) {
+        claims.set(id, claim)
       }
     })
+    const found = [...claims.values()].sort((a, b) => a.index - b.index)
     numberNotes(found)
 
     const notes = {}
     const shots = {}
     const byNumber = new Map()
-    for (const { comment, index, data, n } of found) {
+    for (const { comment, index, data, n, trusted } of found) {
       const { shot, text, by, n: unused, ...fields } = data
       const login = comment.user?.login ?? 'someone'
-      if (typeof shot === 'string') {
+      if (isShot(shot)) {
         shots[fields.id] = shot
       }
       byNumber.set(n, fields.id)
@@ -210,12 +237,12 @@
         n,
         status: 'open',
         createdAt: comment.created_at,
-        hasShot: typeof shot === 'string',
+        hasShot: isShot(shot),
         commentId: comment.id,
         commentUrl: comment.html_url,
         author: login,
         /** False for a note from someone without write access to the repository */
-        trusted: everyone || isCollaborator(comment),
+        trusted,
         position: index,
         messages: {
           first: {
@@ -297,5 +324,5 @@
     return { notes, shots }
   }
 
-  globalThis.ainotelayerFormat = { STATUS, STATUS_TAG, hiddenBlock, readHidden, isStatus, noteBody, eventBody, fold }
+  globalThis.ainotelayerFormat = { STATUS, STATUS_TAG, hiddenBlock, readHidden, isId, isShot, isStatus, noteBody, eventBody, fold }
 })()

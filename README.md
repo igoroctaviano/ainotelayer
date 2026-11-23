@@ -17,6 +17,8 @@ right-click the real app and leave the note on the thing itself.
 - What it sat inside at the time (dialog, menu, tab, collapsed section) and the
   control that opened each one.
 - The reviewer's steps before the note: clicks, value changes, zooms, shortcuts.
+  What was typed into a password field, or one that looks like it holds a
+  secret (a code, a token, a card number), is left out.
 - With the build plugin: the source file and line, linked to the build's commit.
 - For canvas viewers: a picture of the viewport with the spot marked.
 
@@ -175,8 +177,11 @@ action wraps the app's own Vite config from outside.
 ```yaml
 - id: stamp
   uses: igoroctaviano/ainotelayer/stamp@main
-- run: npm run build -- --config "${{ steps.stamp.outputs.config }}" --configLoader native
+- run: npm run build -- ${{ steps.stamp.outputs.args }}
 ```
+
+`args` is `--config <the wrapped config> --configLoader native`, and empty when
+the app has no Vite config, so the build then runs as usual.
 
 It needs Node 22.18 or newer when the app's Vite config is TypeScript.
 
@@ -255,6 +260,11 @@ a note written by someone with write access to the repository, or by the
 reviewer themself; for anyone else's note the reviewer is shown the names and
 chooses "Open it". A link to a note never changes page by itself.
 
+What a note carries is checked before it is used: its id has to be a plain
+one, its picture an image as a data URL (never an address to fetch), and its
+link to GitHub an https one. On a pull request, an older comment edited into a
+note cannot replace a collaborator's note or take its number.
+
 ## When the UI changes
 
 A note is matched to its element by score across everything it recorded, so it
@@ -269,8 +279,10 @@ re-check" in the list.
 npm test
 ```
 
-runs the source-stamping tests. Set `STAMP_SWEEP=/path/to/app/src` to also run
-the pass over a real codebase.
+runs the tests for source stamping, for reading notes from pull-request
+comments and the overview written from them, for the local server's store and
+for the injector. Set `STAMP_SWEEP=/path/to/app/src` to also run the stamping
+pass over a real codebase.
 
 `test/anchors.html` checks note matching against simulated UI changes, and
 `test/github.html` checks how notes are rebuilt from pull-request comments:
@@ -293,21 +305,22 @@ Tried:
 
 - The proxy, the injector, browser storage and the shared store, on a real
   React app (Vite, React 19).
-- The pull-request store against a simulated GitHub, and reading a real pull
-  request without sign-in.
+- The pull-request store against a simulated GitHub, and on a real pull
+  request: reading without sign-in, and adding notes from a deployed preview
+  with a pasted token.
+- The actions (`pull-request`, `stamp`, the main one and `summary`) in a
+  manually run preview workflow of a real repository: a Vite and React app
+  deployed to Firebase Hosting, with source stamping on its production build.
+- The `ainotelayer/notes` status and the comment-triggered refresh of the
+  overview, on this repository's own pull requests.
 - The database rules, on the Firebase emulator.
 - Source stamping on a Vite dev server; the stamping pass on about 800
   component files from two apps without a parse failure.
 
 Not tried yet:
 
-- A real Firebase project.
-- Writing to a real pull request from the preview with a pasted token.
-- The comment-triggered refresh of the overview (it only runs once the
-  workflow is on the default branch).
-- The GitHub Action in a workflow.
+- A real Firebase project as the notes database.
 - The webpack/Rspack loader inside a real build.
-- Production builds with source stamping on.
 
 Known limits:
 

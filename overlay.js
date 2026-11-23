@@ -290,6 +290,27 @@
     return event.composedPath().includes(host)
   }
 
+  /**
+   * Notes can come from anyone who may comment or has the preview link, so
+   * what they carry is checked before it is used. An id is a key and a part
+   * of a path: only plain ones count. A picture is an image as a data URL,
+   * never an address to fetch. A link has to be an https one.
+   */
+  const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype']
+  function isId(value) {
+    return typeof value === 'string' && /^[\w-]{1,64}$/.test(value) && !UNSAFE_KEYS.includes(value)
+  }
+  function isShot(value) {
+    return typeof value === 'string' && value.startsWith('data:image/')
+  }
+  function webLink(value) {
+    return typeof value === 'string' && /^https:\/\//i.test(value) ? value : null
+  }
+  /** A path that would land on an object's prototype instead of in the notes */
+  function unsafePath(segments) {
+    return segments.some((segment) => UNSAFE_KEYS.includes(segment))
+  }
+
   function storage(key, value) {
     try {
       if (value === undefined) {
@@ -504,6 +525,9 @@
 
   /** A smaller copy of the slide picture, so it fits inside a comment */
   async function shrinkShot(dataUrl) {
+    if (!isShot(dataUrl)) {
+      return undefined
+    }
     try {
       const image = new Image()
       image.src = dataUrl
@@ -759,6 +783,9 @@
   }
 
   function putLocal(all, segments, value) {
+    if (unsafePath(segments)) {
+      return
+    }
     let node = all
     for (const segment of segments.slice(0, -1)) {
       if (node[segment] === null || typeof node[segment] !== 'object') {
@@ -780,7 +807,7 @@
     if (method === 'GET') {
       let node = all
       for (const segment of segments) {
-        node = node !== null && typeof node === 'object' ? (node[segment] ?? null) : null
+        node = node !== null && typeof node === 'object' && Object.hasOwn(node, segment) ? node[segment] : null
       }
       return node ?? null
     }
@@ -834,6 +861,9 @@
   let tree = {}
 
   function setIn(segments, value) {
+    if (unsafePath(segments)) {
+      return
+    }
     if (segments.length === 0) {
       tree = value !== null && typeof value === 'object' ? value : {}
       return
@@ -863,7 +893,7 @@
       setIn(segments, data)
     }
     state.notes = Object.entries(tree)
-      .filter(([, raw]) => raw !== null && typeof raw === 'object' && raw.createdAt)
+      .filter(([id, raw]) => isId(id) && raw !== null && typeof raw === 'object' && raw.createdAt)
       .map(([id, raw]) => normalize(id, raw))
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
     if (card !== null) {
@@ -1256,6 +1286,26 @@
     return found
   }
 
+  /**
+   * Fields whose value must not travel with a note: passwords, also while
+   * "show password" has turned the field into plain text, one-time codes,
+   * card numbers and the like.
+   */
+  const typedHidden = new WeakSet()
+  function isSecret(element) {
+    if (element.type === 'password' || typedHidden.has(element)) {
+      return true
+    }
+    const hints = [element.getAttribute('autocomplete'), element.getAttribute('name'), element.id].join(' ')
+    return /pass|secret|token|one-time|otp|cc-|card|cvc|cvv/i.test(hints)
+  }
+
+  /** The element as written in the page, shortened, without what was typed into a secret field */
+  function snippetOf(element) {
+    const html = element.outerHTML.replace(/\s+/g, ' ')
+    return (isSecret(element) ? html.replace(/\svalue="[^"]*"/i, '') : html).slice(0, 400)
+  }
+
   function brief(element) {
     return {
       what: element.getAttribute('role') || element.localName,
@@ -1292,7 +1342,7 @@
       viewport: { w: window.innerWidth, h: window.innerHeight },
       components: componentsOf(element),
       containers: containersOf(element),
-      html: element.outerHTML.replace(/\s+/g, ' ').slice(0, 400),
+      html: snippetOf(element),
       text: ownText(element) || undefined,
       attrs: attrsOf(element),
       landmark: landmarkOf(element) || undefined,
@@ -1639,10 +1689,16 @@
     let value
     if (element.type === 'checkbox' || element.type === 'radio') {
       value = String(element.checked)
-    } else if (element.type !== 'password') {
+    } else if (!isSecret(element)) {
       value = String(element.value ?? '').slice(0, 40)
     }
     pushTrail(step('change', element, { value }))
+  }, true)
+  /** A password field stays secret after "show password" turns it into a text field */
+  document.addEventListener('input', (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.type === 'password') {
+      typedHidden.add(event.target)
+    }
   }, true)
   document.addEventListener('wheel', (event) => {
     if (!skipped(event) && event.target instanceof Element && event.target.closest('.ol-viewport,canvas')) {
@@ -1650,7 +1706,7 @@
     }
   }, { capture: true, passive: true })
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && (picking !== null || card !== null || composer !== null)) {
+    if (event.key === 'Escape' && (picking !== null || card !== null || composer !== null || connectCard !== null)) {
       /**
        * Escape closes what the overlay has open and stops there. Passed on,
        * it would also close the app's dialog underneath, and with it the
@@ -1662,6 +1718,7 @@
       }
       closeCard()
       closeComposer()
+      closeConnect()
       event.stopImmediatePropagation()
       return
     }
@@ -1846,7 +1903,21 @@
     }
     if (card !== null) {
       const away = seeking === card.id ? 'seeking' : 'away'
-      const mode = cardPinned ? (pins.get(card.id)?.how ?? 'found') : away
+      let mode = cardPinned ? (pins.get(card.id)?.how ?? 'found') : away
+      /**
+       * While a dialog or menu is still sliding in, its content can look
+       * moved for a moment. Say so only once it has stayed that way.
+       */
+      if (mode === 'moved' || mode === 'changed') {
+        if (card.doubt?.mode !== mode) {
+          card.doubt = { mode, since: now }
+        }
+        if (now - card.doubt.since < 800) {
+          mode = 'found'
+        }
+      } else {
+        card.doubt = null
+      }
       if (card.mode !== mode) {
         card.setMode(mode)
       }
@@ -2072,7 +2143,7 @@
     })
     if (note.hasShot) {
       rest(`shots/${id}`).then((dataUrl) => {
-        if (typeof dataUrl === 'string') {
+        if (isShot(dataUrl)) {
           shot.src = dataUrl
           shot.classList.add('on')
         }
@@ -2088,7 +2159,8 @@
         { class: 'link', title: 'Point this note at a different element', onclick: () => startPicking(id) },
         'Re-attach',
       ),
-      note.commentUrl && h('a', { href: note.commentUrl, target: '_blank', rel: 'noopener' }, 'On GitHub'),
+      webLink(note.commentUrl) !== null &&
+        h('a', { href: webLink(note.commentUrl), target: '_blank', rel: 'noopener' }, 'On GitHub'),
       h('span', { class: 'grow' }),
       h(
         'button',
@@ -2208,6 +2280,12 @@
     renderPins()
   }
 
+  /** randomUUID only exists on https and localhost; a preview may be on neither */
+  function newId() {
+    const random = crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint8Array(4)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+    return random.slice(0, 8)
+  }
+
   function openComposer(event) {
     const hit = event.target
     const draft = {
@@ -2248,7 +2326,7 @@
         return
       }
       storage(WHO, initials.value.trim())
-      const id = crypto.randomUUID().slice(0, 8)
+      const id = newId()
       const now = new Date().toISOString()
       const { shot, ...fields } = draft
       try {
@@ -2924,20 +3002,22 @@
     }
     const current = (await rest('notes')) ?? {}
     const counts = { added: 0, updated: 0 }
+    /** Message keys become part of a path too */
+    const messagesOf = (note) => Object.entries(note.messages ?? {}).filter(([messageId]) => isId(messageId))
     for (const [id, note] of Object.entries(incoming)) {
-      if (note === null || typeof note !== 'object' || !note.createdAt) {
+      if (!isId(id) || note === null || typeof note !== 'object' || !note.createdAt) {
         continue
       }
-      const mine = current[id]
+      const mine = Object.hasOwn(current, id) ? current[id] : undefined
       if (mine === undefined) {
-        const shot = data.shots?.[id]
+        const shot = isShot(data.shots?.[id]) ? data.shots[id] : undefined
         await rest(`notes/${id}`, 'PUT', GITHUB && typeof shot === 'string' ? { ...note, shot } : note)
         if (typeof shot === 'string') {
           await rest(`shots/${id}`, 'PUT', shot).catch(() => {})
         }
         if (GITHUB) {
           /** A pull request holds one comment per message, so the rest of the thread follows */
-          for (const [messageId, message] of Object.entries(note.messages ?? {})) {
+          for (const [messageId, message] of messagesOf(note)) {
             if (messageId !== 'first') {
               await rest(`notes/${id}/messages/${messageId}`, 'PUT', message)
             }
@@ -2960,7 +3040,7 @@
         await rest(`notes/${id}`, 'PATCH', patch)
         changed = true
       }
-      for (const [messageId, message] of Object.entries(note.messages ?? {})) {
+      for (const [messageId, message] of messagesOf(note)) {
         if (mine.messages?.[messageId] === undefined) {
           await rest(`notes/${id}/messages/${messageId}`, 'PUT', message)
           changed = true

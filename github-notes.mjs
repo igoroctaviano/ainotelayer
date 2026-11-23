@@ -80,6 +80,8 @@ function inert(text, limit = 90) {
     .replace(/([\\`*_~[\]()#!|])/g, '\\$1')
     .replace(/@/g, '@​')
     .replace(/:\/\//g, ':​//')
+    /** GitHub also links a bare "www." address */
+    .replace(/\bwww\./gi, 'www​.')
 }
 
 function day(iso) {

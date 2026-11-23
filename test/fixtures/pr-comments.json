@@ -521,6 +521,64 @@
           "outside": true
         }
       ]
+    },
+    {
+      "name": "an older comment edited into a note cannot replace a collaborator's note or take its number",
+      "comments": [
+        {
+          "id": 99,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T09:59:00Z",
+          "updated_at": "2026-11-17T10:11:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-99",
+          "body": "**Note N1** · Change · button “Go to”\n\n> Wants to be N1\n\n[Open in the preview](https://preview.example/studies/1#ainote=eeee5555) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"eeee5555\",\"text\":\"Wants to be N1\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\"},\"n\":1} -->"
+        },
+        {
+          "id": 100,
+          "user": {
+            "login": "outsider",
+            "type": "User"
+          },
+          "author_association": "NONE",
+          "created_at": "2026-11-17T10:00:00Z",
+          "updated_at": "2026-11-17T10:10:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-100",
+          "body": "**Note N1** · Change · button “Go to”\n\n> Taken over\n\n[Open in the preview](https://preview.example/studies/1#ainote=aaaa1111) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"Taken over\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\"},\"n\":1} -->"
+        },
+        {
+          "id": 101,
+          "user": {
+            "login": "igor",
+            "type": "User"
+          },
+          "author_association": "OWNER",
+          "created_at": "2026-11-17T10:01:00Z",
+          "updated_at": "2026-11-17T10:01:00Z",
+          "html_url": "https://github.com/o/r/pull/7#issuecomment-101",
+          "body": "**Note N1** · Change · button “Go to”\n\n> From a maintainer\n\n[Open in the preview](https://preview.example/studies/1#ainote=aaaa1111) · build `abc1234`\n\n<!-- ainotelayer:note {\"id\":\"aaaa1111\",\"text\":\"From a maintainer\",\"kind\":\"Change\",\"scope\":\"page\",\"url\":\"https://preview.example/studies/1\",\"path\":\"/studies/1\",\"sha\":\"abc1234\",\"anchor\":{\"xpath\":\"//*[@id=\\\"root\\\"]/button[8]\",\"selector\":\"button\",\"offset\":{\"x\":0.5,\"y\":0.5},\"tag\":\"button\",\"label\":\"Go to\"},\"n\":1} -->"
+        }
+      ],
+      "expect": [
+        {
+          "n": 1,
+          "id": "aaaa1111",
+          "status": "open",
+          "replies": 0,
+          "author": "igor"
+        },
+        {
+          "n": 2,
+          "id": "eeee5555",
+          "status": "open",
+          "replies": 0,
+          "author": "outsider",
+          "outside": true
+        }
+      ]
     }
   ]
 }
